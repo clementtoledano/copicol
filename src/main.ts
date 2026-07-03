@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   deleteItem,
   hideWindow,
@@ -266,7 +267,36 @@ searchInput.addEventListener("input", () => {
   void refresh();
 });
 
+/// Poignées de redimensionnement pour la fenêtre sans décorations :
+/// 4 bords + 4 coins qui délèguent le drag natif au gestionnaire de fenêtres.
+type ResizeDirection = Parameters<
+  ReturnType<typeof getCurrentWindow>["startResizeDragging"]
+>[0];
+
+function setupResizeHandles(): void {
+  const handles: Array<[string, ResizeDirection]> = [
+    ["n", "North"],
+    ["s", "South"],
+    ["e", "East"],
+    ["w", "West"],
+    ["nw", "NorthWest"],
+    ["ne", "NorthEast"],
+    ["sw", "SouthWest"],
+    ["se", "SouthEast"],
+  ];
+  for (const [cls, direction] of handles) {
+    const zone = document.createElement("div");
+    zone.className = `resize-handle resize-${cls}`;
+    zone.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      void getCurrentWindow().startResizeDragging(direction);
+    });
+    document.body.appendChild(zone);
+  }
+}
+
 async function init(): Promise<void> {
+  setupResizeHandles();
   await refresh();
 
   await onClipboardChanged(() => void refresh());
