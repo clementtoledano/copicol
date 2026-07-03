@@ -36,6 +36,8 @@ let kinds: KindCount[] = [];
 let selectedIndex = 0;
 let activeKind: string | null = null;
 
+const MONO_KINDS = new Set(["sql", "code", "json"]);
+
 function relativeTime(unixSeconds: number): string {
   const diff = Math.floor(Date.now() / 1000) - unixSeconds;
   if (diff < 60) return "à l'instant";
@@ -104,8 +106,8 @@ function renderList(): void {
     if (item.pinned) li.classList.add("pinned");
 
     const preview = document.createElement("div");
-    preview.className = "preview";
-    preview.textContent = item.content;
+    preview.className = MONO_KINDS.has(item.kind) ? "preview mono" : "preview";
+    fillPreview(preview, item.content, searchInput.value.trim());
 
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -134,6 +136,7 @@ function renderList(): void {
     const time = document.createElement("span");
     time.className = "time";
     time.textContent = relativeTime(item.created_at);
+    time.title = new Date(item.created_at * 1000).toLocaleString("fr-FR");
     meta.appendChild(time);
 
     // Actions au survol : épingler, supprimer
@@ -162,7 +165,7 @@ function renderList(): void {
     li.appendChild(meta);
     li.appendChild(actions);
 
-    li.addEventListener("click", () => void pasteItem(item.id));
+    li.addEventListener("click", () => pasteWithFlash(index));
     li.addEventListener("mousemove", () => {
       if (selectedIndex !== index) {
         selectedIndex = index;
@@ -172,6 +175,37 @@ function renderList(): void {
 
     listEl.appendChild(li);
   });
+}
+
+/// Remplit l'aperçu en surlignant les occurrences du terme recherché
+/// (construction DOM sans innerHTML).
+function fillPreview(el: HTMLElement, content: string, term: string): void {
+  if (!term) {
+    el.textContent = content;
+    return;
+  }
+  const lower = content.toLowerCase();
+  const needle = term.toLowerCase();
+  let pos = 0;
+  let idx = lower.indexOf(needle);
+  while (idx !== -1) {
+    if (idx > pos) el.appendChild(document.createTextNode(content.slice(pos, idx)));
+    const mark = document.createElement("mark");
+    mark.textContent = content.slice(idx, idx + needle.length);
+    el.appendChild(mark);
+    pos = idx + needle.length;
+    idx = lower.indexOf(needle, pos);
+  }
+  if (pos < content.length) el.appendChild(document.createTextNode(content.slice(pos)));
+}
+
+/// Flash de confirmation sur l'élément, puis collage.
+function pasteWithFlash(index: number): void {
+  const item = items[index];
+  if (!item) return;
+  const node = listEl.querySelectorAll<HTMLLIElement>("li.item")[index];
+  node?.classList.add("pasting");
+  window.setTimeout(() => void pasteItem(item.id), 100);
 }
 
 function updateSelection(): void {
@@ -200,8 +234,7 @@ document.addEventListener("keydown", (e) => {
       break;
     case "Enter": {
       e.preventDefault();
-      const item = items[selectedIndex];
-      if (item) void pasteItem(item.id);
+      pasteWithFlash(selectedIndex);
       break;
     }
     case "Escape":

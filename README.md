@@ -14,6 +14,10 @@ Appuyez sur `Ctrl+Shift+V`, tapez quelques lettres, appuyez sur `Entrée` — c'
 - ⌨️ **Raccourci global** `Ctrl+Shift+V` pour afficher/cacher la fenêtre
 - 📌 **Icône dans la zone de notification** — l'application vit dans le tray
 - 🚀 **Collage direct** : `Entrée` colle l'élément dans l'application précédente
+- 🔄 **Démarrage automatique** avec Windows, caché dans le tray — et une seule
+  instance à la fois (relancer l'exe affiche la fenêtre existante)
+- 🪟 **Fenêtre redimensionnable**, taille et position mémorisées ; contenu
+  des éléments affiché en entier, en police monospace pour le code/SQL/JSON
 
 ## Rangement automatique par type
 
