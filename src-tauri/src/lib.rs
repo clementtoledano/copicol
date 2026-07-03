@@ -87,6 +87,23 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn run() {
     tauri::Builder::default()
+        // Relancer l'exe affiche la fenêtre existante au lieu d'un doublon
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_window(app);
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        // Mémorise taille et position (pas la visibilité : démarrage caché)
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION,
+                )
+                .build(),
+        )
         .setup(|app| {
             // Base SQLite dans le dossier de données de l'application
             let data_dir = app.path().app_data_dir()?;
@@ -107,6 +124,17 @@ pub fn run() {
             }
             if let Err(e) = build_tray(app) {
                 eprintln!("copicol: icône de notification indisponible: {e}");
+            }
+
+            // Démarrage automatique avec la session (non fatal)
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let autolaunch = app.autolaunch();
+                if !autolaunch.is_enabled().unwrap_or(false) {
+                    if let Err(e) = autolaunch.enable() {
+                        eprintln!("copicol: démarrage automatique indisponible: {e}");
+                    }
+                }
             }
 
             Ok(())

@@ -79,8 +79,19 @@ pub async fn paste_item(app: AppHandle, id: i64) -> Result<(), String> {
         let _ = db::mark_used(&conn, id);
     }
 
-    // Laisse le temps au focus de revenir à l'application précédente.
-    std::thread::sleep(Duration::from_millis(150));
+    // Attend que le focus ait réellement quitté copicol avant de simuler
+    // Ctrl+V : sinon le collage frappe notre propre webview et déclenche
+    // le dialogue de permission presse-papiers de WebView2 sous Windows.
+    if let Some(w) = app.get_webview_window("main") {
+        for _ in 0..40 {
+            if !w.is_focused().unwrap_or(false) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    // Petite marge pour que l'application cible soit prête à recevoir la frappe
+    std::thread::sleep(Duration::from_millis(100));
     simulate_paste();
 
     Ok(())
