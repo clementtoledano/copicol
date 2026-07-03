@@ -6,6 +6,8 @@ export interface Item {
   content: string;
   kind: string;
   pinned: boolean;
+  /** Nom descriptif du favori ; null tant qu'il n'a jamais été nommé. */
+  label: string | null;
   created_at: number;
   use_count: number;
 }
@@ -26,12 +28,28 @@ export function listKinds(): Promise<KindCount[]> {
   return invoke("list_kinds");
 }
 
+/** Favoris (épinglés) classés par nom ; `search` filtre sur le nom et le contenu. */
+export function listFavorites(search: string): Promise<Item[]> {
+  return invoke("list_favorites", { search: search || null });
+}
+
+/** Nombre de favoris, pour le compteur de l'onglet. */
+export function countFavorites(): Promise<number> {
+  return invoke("count_favorites");
+}
+
 export function pasteItem(id: number): Promise<void> {
   return invoke("paste_item", { id });
 }
 
-export function togglePin(id: number): Promise<void> {
-  return invoke("toggle_pin", { id });
+/** Épingle l'élément avec un nom descriptif (obligatoire) ; sert aussi à renommer. */
+export function pinItem(id: number, label: string): Promise<void> {
+  return invoke("pin_item", { id, label });
+}
+
+/** Retire l'élément des favoris ; le nom est conservé côté base. */
+export function unpinItem(id: number): Promise<void> {
+  return invoke("unpin_item", { id });
 }
 
 export function deleteItem(id: number): Promise<void> {

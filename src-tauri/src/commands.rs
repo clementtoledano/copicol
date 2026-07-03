@@ -22,15 +22,54 @@ pub fn list_kinds(state: State<AppState>) -> Result<Vec<db::KindCount>, String> 
 }
 
 #[tauri::command]
-pub fn toggle_pin(state: State<AppState>, id: i64) -> Result<(), String> {
+pub fn list_favorites(
+    state: State<AppState>,
+    search: Option<String>,
+) -> Result<Vec<db::Item>, String> {
     let conn = state.db.lock().unwrap();
-    db::toggle_pin(&conn, id).map_err(|e| e.to_string())
+    db::list_favorites(&conn, search.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_item(state: State<AppState>, id: i64) -> Result<(), String> {
+pub fn count_favorites(state: State<AppState>) -> Result<i64, String> {
     let conn = state.db.lock().unwrap();
-    db::delete_item(&conn, id).map_err(|e| e.to_string())
+    db::count_favorites(&conn).map_err(|e| e.to_string())
+}
+
+/// Épingle un élément avec son nom descriptif (obligatoire côté UI).
+/// Sert aussi à renommer un favori existant. Reconstruit le menu du tray.
+#[tauri::command]
+pub fn pin_item(app: AppHandle, id: i64, label: String) -> Result<(), String> {
+    {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap();
+        db::pin_item(&conn, id, &label).map_err(|e| e.to_string())?;
+    }
+    crate::refresh_tray_menu(&app);
+    Ok(())
+}
+
+/// Retire un élément des favoris (son nom est conservé en base).
+#[tauri::command]
+pub fn unpin_item(app: AppHandle, id: i64) -> Result<(), String> {
+    {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap();
+        db::unpin_item(&conn, id).map_err(|e| e.to_string())?;
+    }
+    crate::refresh_tray_menu(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_item(app: AppHandle, id: i64) -> Result<(), String> {
+    {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap();
+        db::delete_item(&conn, id).map_err(|e| e.to_string())?;
+    }
+    crate::refresh_tray_menu(&app);
+    Ok(())
 }
 
 #[tauri::command]

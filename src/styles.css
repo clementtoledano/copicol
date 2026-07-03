@@ -236,6 +236,120 @@ mark {
   font-size: 11px;
 }
 
+/* ── Titre d'un favori nommé ─────────────────────────── */
+.item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.item-title-text {
+  overflow-wrap: anywhere;
+}
+
+.item-title:hover .item-title-text {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+/* ── Modales (nom de favori, confirmation) ───────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 10px; /* épouse les coins arrondis de la fenêtre */
+}
+
+.modal {
+  width: 100%;
+  max-width: 280px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.modal-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.modal-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.modal-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.modal-btn:hover {
+  border-color: var(--accent);
+}
+
+.modal-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.modal-btn.primary:hover {
+  filter: brightness(1.12);
+}
+
+.modal-btn.primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.modal-btn.danger {
+  background: rgba(217, 83, 79, 0.15);
+  border-color: #d9534f;
+  color: #f0a6a4;
+}
+
+.modal-btn.danger:hover {
+  background: rgba(217, 83, 79, 0.28);
+}
+
 .empty {
   text-align: center;
   color: var(--text-dim);

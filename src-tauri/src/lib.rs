@@ -7,7 +7,7 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::Mutex;
 
 use rusqlite::Connection;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuBuilder, MenuItem, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
@@ -52,12 +52,99 @@ fn register_shortcut(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
+/// Libellé de repli pour un favori sans nom (favori hérité) : contenu réduit à
+/// une ligne et tronqué, pour rester lisible dans le menu.
+fn tray_label_fallback(content: &str) -> String {
+    let one_line = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > 48 {
+        format!("{}…", one_line.chars().take(48).collect::<String>())
+    } else {
+        one_line
+    }
+}
+
+/// Construit le menu du tray : Afficher, sous-menu « Favoris » (un item par
+/// favori, id « fav:<id> »), Quitter. Les favoris sont lus en base — donc
+/// présents dès le démarrage, avant même l'ouverture de la fenêtre.
+fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let favorites = {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap();
+        db::list_favorites(&conn, None).unwrap_or_default()
+    };
+
+    let mut fav = SubmenuBuilder::new(app, "Favoris");
+    if favorites.is_empty() {
+        let none = MenuItem::with_id(app, "fav_none", "(aucun favori)", false, None::<&str>)?;
+        fav = fav.item(&none);
+    } else {
+        for f in favorites {
+            let name = f
+                .label
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| tray_label_fallback(&f.content));
+            fav = fav.text(format!("fav:{}", f.id), name);
+        }
+    }
+    let fav = fav.build()?;
+
+    MenuBuilder::new(app)
+        .text("show", "Afficher")
+        .item(&fav)
+        .separator()
+        .text("quit", "Quitter")
+        .build()
+}
+
+/// Reconstruit le menu du tray sur le thread principal (requis pour les
+/// opérations de menu). Appelé après tout changement de favoris. Sans effet si
+/// le tray n'a pas pu être créé.
+pub(crate) fn refresh_tray_menu(app: &AppHandle) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Ok(menu) = tray_menu(&handle) {
+            if let Some(tray) = handle.tray_by_id("main") {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+    });
+}
+
+/// Depuis le menu du tray : place le contenu du favori dans le presse-papiers
+/// (via le thread watcher, pour ne pas le réinsérer dans l'historique) et
+/// incrémente son compteur d'usage. L'utilisateur colle ensuite (Ctrl+V).
+fn copy_favorite_to_clipboard(app: &AppHandle, id: i64) {
+    let state = app.state::<AppState>();
+    let content = {
+        let conn = state.db.lock().unwrap();
+        match db::get_content(&conn, id) {
+            Ok(Some(c)) => c,
+            _ => return,
+        }
+    };
+
+    let (ack_tx, ack_rx) = mpsc::channel();
+    if state
+        .watcher_tx
+        .lock()
+        .unwrap()
+        .send(WatcherMsg::Write {
+            text: content,
+            ack: ack_tx,
+        })
+        .is_ok()
+    {
+        let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(1));
+    }
+
+    let conn = state.db.lock().unwrap();
+    let _ = db::mark_used(&conn, id);
+}
+
 /// Icône de la zone de notification : l'app vit dans le tray.
 fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let show = MenuItem::with_id(app, "show", "Afficher", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quitter", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
-    TrayIconBuilder::new()
+    let menu = tray_menu(app.handle())?;
+    TrayIconBuilder::with_id("main")
         .icon(
             app.default_window_icon()
                 .ok_or("icône par défaut manquante")?
@@ -69,7 +156,11 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_window(app),
             "quit" => app.exit(0),
-            _ => {}
+            other => {
+                if let Some(fid) = other.strip_prefix("fav:").and_then(|s| s.parse::<i64>().ok()) {
+                    copy_favorite_to_clipboard(app, fid);
+                }
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -163,8 +254,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_items,
             commands::list_kinds,
+            commands::list_favorites,
+            commands::count_favorites,
             commands::paste_item,
-            commands::toggle_pin,
+            commands::pin_item,
+            commands::unpin_item,
             commands::delete_item,
             commands::hide_window,
         ])
