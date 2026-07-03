@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod detect;
 mod watcher;
 
 use std::sync::mpsc::{self, Sender};
@@ -124,11 +125,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_items,
-            commands::list_categories,
+            commands::list_kinds,
             commands::paste_item,
             commands::toggle_pin,
             commands::delete_item,
-            commands::set_category,
             commands::hide_window,
         ])
         .run(tauri::generate_context!())

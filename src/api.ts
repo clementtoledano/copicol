@@ -4,26 +4,26 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 export interface Item {
   id: number;
   content: string;
+  kind: string;
   pinned: boolean;
-  category_id: number | null;
   created_at: number;
   use_count: number;
 }
 
-export interface Category {
-  id: number;
-  name: string;
+export interface KindCount {
+  kind: string;
+  count: number;
 }
 
-export function listItems(search: string, category: number | null): Promise<Item[]> {
+export function listItems(search: string, kind: string | null): Promise<Item[]> {
   return invoke("list_items", {
     search: search || null,
-    category,
+    kind,
   });
 }
 
-export function listCategories(): Promise<Category[]> {
-  return invoke("list_categories");
+export function listKinds(): Promise<KindCount[]> {
+  return invoke("list_kinds");
 }
 
 export function pasteItem(id: number): Promise<void> {
@@ -36,10 +36,6 @@ export function togglePin(id: number): Promise<void> {
 
 export function deleteItem(id: number): Promise<void> {
   return invoke("delete_item", { id });
-}
-
-export function setCategory(id: number, category: number | null): Promise<void> {
-  return invoke("set_category", { id, category });
 }
 
 export function hideWindow(): Promise<void> {
