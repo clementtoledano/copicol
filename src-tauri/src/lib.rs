@@ -145,9 +145,18 @@ pub fn run() {
                 let _ = window.hide();
                 api.prevent_close();
             }
-            // Comportement lanceur : la fenêtre disparaît quand elle perd le focus
+            // Comportement lanceur : la fenêtre disparaît quand elle perd le focus.
+            // Le redimensionnement natif (startResizeDragging) déclenche une perte de
+            // focus transitoire du WebView : on temporise et revérifie avant de cacher,
+            // pour ne pas fermer la fenêtre quand l'utilisateur redimensionne.
             WindowEvent::Focused(false) => {
-                let _ = window.hide();
+                let window = window.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if !window.is_focused().unwrap_or(false) {
+                        let _ = window.hide();
+                    }
+                });
             }
             _ => {}
         })
