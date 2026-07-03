@@ -447,3 +447,94 @@ kbd {
   height: 12px;
   cursor: nesw-resize;
 }
+
+/* ── Onglet Favoris : liste groupée par catégorie ───── */
+.fav-header {
+  list-style: none;
+  padding: 8px 4px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.fav-header:first-child {
+  padding-top: 2px;
+}
+
+.fav-item {
+  padding: 6px 10px;
+}
+
+.fav-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fav-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fav-loupe {
+  flex: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fav-item:hover .fav-loupe,
+.fav-item.selected .fav-loupe,
+.fav-item.expanded .fav-loupe {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.fav-loupe:hover {
+  border-color: var(--accent);
+}
+
+.fav-detail {
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fav-detail .preview {
+  max-height: 160px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.fav-detail-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.fav-action {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.fav-action:hover {
+  border-color: var(--accent);
+}

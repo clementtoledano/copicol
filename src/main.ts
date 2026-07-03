@@ -42,6 +42,8 @@ let selectedIndex = 0;
 let activeKind: string | null = null;
 // Onglet Favoris actif : affiche les épinglés (exclusifs des autres onglets).
 let showFavorites = false;
+// Favoris dont la carte est dépliée (aperçu visible) dans l'onglet Favoris.
+const expandedFavIds = new Set<number>();
 
 const MONO_KINDS = new Set(["sql", "code", "json"]);
 
@@ -225,9 +227,12 @@ async function refresh(): Promise<void> {
   if (activeKind !== null && !kinds.some((k) => k.kind === activeKind)) {
     activeKind = null;
   }
-  items = showFavorites
-    ? await listFavorites(search)
-    : await listItems(search, activeKind);
+  if (showFavorites) {
+    // Réordonné pour un affichage groupé par catégorie (voir renderFavorites)
+    items = groupFavoritesByKind(await listFavorites(search));
+  } else {
+    items = await listItems(search, activeKind);
+  }
   if (selectedIndex >= items.length) selectedIndex = Math.max(0, items.length - 1);
   renderTabs();
   renderList();
@@ -294,6 +299,11 @@ function renderList(): void {
         : "L'historique est vide — copiez quelque chose !";
     }
     listEl.appendChild(empty);
+    return;
+  }
+
+  if (showFavorites) {
+    renderFavorites();
     return;
   }
 
@@ -394,6 +404,109 @@ function renderList(): void {
 
     listEl.appendChild(li);
   });
+}
+
+/// Réordonne les favoris (déjà triés par nom) en groupes par catégorie,
+/// les catégories les plus fournies d'abord. L'ordre du tableau plat suit
+/// l'ordre d'affichage, pour que la navigation clavier reste cohérente.
+function groupFavoritesByKind(favs: Item[]): Item[] {
+  const groups = new Map<string, Item[]>();
+  for (const item of favs) {
+    const arr = groups.get(item.kind);
+    if (arr) arr.push(item);
+    else groups.set(item.kind, [item]);
+  }
+  return [...groups.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .flatMap(([, arr]) => arr);
+}
+
+/// Rend l'onglet Favoris : en-têtes de catégorie puis lignes compactes
+/// (nom + loupe). `items` est déjà en ordre groupé (voir groupFavoritesByKind).
+function renderFavorites(): void {
+  let currentKind: string | null = null;
+  items.forEach((item, index) => {
+    if (item.kind !== currentKind) {
+      currentKind = item.kind;
+      const header = document.createElement("li");
+      header.className = "fav-header";
+      const meta = kindMeta(item.kind);
+      header.textContent = `${meta.icon} ${meta.label}`;
+      listEl.appendChild(header);
+    }
+    listEl.appendChild(buildFavoriteRow(item, index));
+  });
+}
+
+/// Une ligne de favori : nom + loupe. La loupe déplie/replie la carte en place
+/// (aperçu du contenu + actions), sans reconstruire toute la liste.
+function buildFavoriteRow(item: Item, index: number): HTMLLIElement {
+  const li = document.createElement("li");
+  li.className = index === selectedIndex ? "item fav-item selected" : "item fav-item";
+  const expanded = expandedFavIds.has(item.id);
+  if (expanded) li.classList.add("expanded");
+
+  const head = document.createElement("div");
+  head.className = "fav-head";
+
+  const name = document.createElement("span");
+  name.className = "fav-name";
+  fillPreview(name, item.label ?? "(sans nom)", searchInput.value.trim());
+  head.appendChild(name);
+
+  const loupe = document.createElement("button");
+  loupe.className = "fav-loupe";
+  loupe.title = expanded ? "Replier" : "Aperçu";
+  loupe.textContent = expanded ? "▾" : "🔍";
+  loupe.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (expanded) expandedFavIds.delete(item.id);
+    else expandedFavIds.add(item.id);
+    li.replaceWith(buildFavoriteRow(item, index)); // bascule en place
+  });
+  head.appendChild(loupe);
+  li.appendChild(head);
+
+  if (expanded) {
+    const detail = document.createElement("div");
+    detail.className = "fav-detail";
+
+    const preview = document.createElement("div");
+    preview.className = MONO_KINDS.has(item.kind) ? "preview mono" : "preview";
+    preview.textContent = item.content;
+    detail.appendChild(preview);
+
+    const actions = document.createElement("div");
+    actions.className = "fav-detail-actions";
+    actions.appendChild(favAction("Coller", () => pasteWithFlash(index)));
+    actions.appendChild(favAction("Renommer", () => void renameFavorite(item)));
+    actions.appendChild(favAction("Retirer", () => void togglePinFlow(item)));
+    detail.appendChild(actions);
+
+    li.appendChild(detail);
+  }
+
+  li.addEventListener("click", () => pasteWithFlash(index));
+  li.addEventListener("mousemove", () => {
+    if (selectedIndex !== index) {
+      selectedIndex = index;
+      updateSelection();
+    }
+  });
+  return li;
+}
+
+/// Bouton d'action de la carte dépliée ; n'interfère pas avec le collage (clic
+/// sur la ligne).
+function favAction(label: string, onClick: () => void): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.className = "fav-action";
+  btn.textContent = label;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onClick();
+  });
+  return btn;
 }
 
 /// Remplit l'aperçu en surlignant les occurrences du terme recherché
@@ -529,6 +642,7 @@ async function init(): Promise<void> {
   await onClipboardChanged(() => void refresh());
   await onWindowShown(() => {
     closeModals(); // au cas où la fenêtre a été cachée pendant une saisie
+    expandedFavIds.clear();
     searchInput.value = "";
     selectedIndex = 0;
     searchInput.focus();
