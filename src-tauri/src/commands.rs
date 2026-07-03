@@ -1,0 +1,114 @@
+use std::sync::mpsc;
+use std::time::Duration;
+use tauri::{AppHandle, Manager, State};
+
+use crate::watcher::WatcherMsg;
+use crate::{db, AppState};
+
+#[tauri::command]
+pub fn list_items(
+    state: State<AppState>,
+    search: Option<String>,
+    category: Option<i64>,
+) -> Result<Vec<db::Item>, String> {
+    let conn = state.db.lock().unwrap();
+    db::list_items(&conn, search.as_deref(), category).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_categories(state: State<AppState>) -> Result<Vec<db::Category>, String> {
+    let conn = state.db.lock().unwrap();
+    db::list_categories(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn toggle_pin(state: State<AppState>, id: i64) -> Result<(), String> {
+    let conn = state.db.lock().unwrap();
+    db::toggle_pin(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_item(state: State<AppState>, id: i64) -> Result<(), String> {
+    let conn = state.db.lock().unwrap();
+    db::delete_item(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_category(
+    state: State<AppState>,
+    id: i64,
+    category: Option<i64>,
+) -> Result<(), String> {
+    let conn = state.db.lock().unwrap();
+    db::set_category(&conn, id, category).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn hide_window(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+}
+
+/// Colle un élément : écrit son contenu dans le presse-papiers, cache la
+/// fenêtre pour rendre le focus à l'application précédente, puis simule
+/// Ctrl+V (Cmd+V sur macOS). Si la simulation échoue, le contenu reste
+/// dans le presse-papiers et l'utilisateur peut coller manuellement.
+#[tauri::command]
+pub async fn paste_item(app: AppHandle, id: i64) -> Result<(), String> {
+    let state = app.state::<AppState>();
+
+    let content = {
+        let conn = state.db.lock().unwrap();
+        db::get_content(&conn, id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "élément introuvable".to_string())?
+    };
+
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+
+    // L'écriture passe par le thread watcher (unique propriétaire du
+    // presse-papiers), qui met aussi à jour son hash pour ne pas
+    // réinsérer ce contenu dans l'historique.
+    let (ack_tx, ack_rx) = mpsc::channel();
+    state
+        .watcher_tx
+        .lock()
+        .unwrap()
+        .send(WatcherMsg::Write {
+            text: content,
+            ack: ack_tx,
+        })
+        .map_err(|e| e.to_string())?;
+    let _ = ack_rx.recv_timeout(Duration::from_secs(1));
+
+    {
+        let conn = state.db.lock().unwrap();
+        let _ = db::mark_used(&conn, id);
+    }
+
+    // Laisse le temps au focus de revenir à l'application précédente.
+    std::thread::sleep(Duration::from_millis(150));
+    simulate_paste();
+
+    Ok(())
+}
+
+fn simulate_paste() {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+    let Ok(mut enigo) = Enigo::new(&Settings::default()) else {
+        return; // fallback : le contenu est déjà dans le presse-papiers
+    };
+
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta;
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+
+    let _ = enigo.key(modifier, Direction::Press);
+    let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+    let _ = enigo.key(modifier, Direction::Release);
+}

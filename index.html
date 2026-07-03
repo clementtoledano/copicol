@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>copicol</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <main id="app">
+      <div id="searchbar">
+        <span id="search-icon">🔍</span>
+        <input
+          id="search"
+          type="text"
+          placeholder="Rechercher…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <div id="categories"></div>
+      <ul id="list"></ul>
+      <footer id="hints">
+        <span><kbd>↑↓</kbd> naviguer</span>
+        <span><kbd>Entrée</kbd> coller</span>
+        <span><kbd>Ctrl+P</kbd> épingler</span>
+        <span><kbd>Suppr</kbd> supprimer</span>
+        <span><kbd>Échap</kbd> fermer</span>
+      </footer>
+    </main>
+  </body>
+</html>
