@@ -1,25 +1,40 @@
 import {
   deleteItem,
   hideWindow,
-  listCategories,
   listItems,
+  listKinds,
   onClipboardChanged,
   onWindowShown,
   pasteItem,
-  setCategory,
   togglePin,
-  type Category,
   type Item,
+  type KindCount,
 } from "./api";
 
 const searchInput = document.getElementById("search") as HTMLInputElement;
 const listEl = document.getElementById("list") as HTMLUListElement;
-const categoriesEl = document.getElementById("categories") as HTMLDivElement;
+const tabsEl = document.getElementById("tabs") as HTMLDivElement;
+
+const KIND_META: Record<string, { label: string; icon: string }> = {
+  sql: { label: "SQL", icon: "🗄️" },
+  code: { label: "Code", icon: "⌨️" },
+  url: { label: "URL", icon: "🔗" },
+  email: { label: "Email", icon: "✉️" },
+  json: { label: "JSON", icon: "🧩" },
+  color: { label: "Couleur", icon: "🎨" },
+  phone: { label: "Téléphone", icon: "📞" },
+  path: { label: "Chemin", icon: "📁" },
+  text: { label: "Texte", icon: "📄" },
+};
+
+function kindMeta(kind: string): { label: string; icon: string } {
+  return KIND_META[kind] ?? { label: kind, icon: "📄" };
+}
 
 let items: Item[] = [];
-let categories: Category[] = [];
+let kinds: KindCount[] = [];
 let selectedIndex = 0;
-let activeCategory: number | null = null;
+let activeKind: string | null = null;
 
 function relativeTime(unixSeconds: number): string {
   const diff = Math.floor(Date.now() / 1000) - unixSeconds;
@@ -29,41 +44,44 @@ function relativeTime(unixSeconds: number): string {
   return `il y a ${Math.floor(diff / 86400)} j`;
 }
 
-function categoryName(id: number | null): string | null {
-  if (id === null) return null;
-  return categories.find((c) => c.id === id)?.name ?? null;
-}
-
 async function refresh(): Promise<void> {
-  items = await listItems(searchInput.value.trim(), activeCategory);
+  kinds = await listKinds();
+  // L'onglet actif a pu se vider (suppression du dernier élément) : retour à Tous
+  if (activeKind !== null && !kinds.some((k) => k.kind === activeKind)) {
+    activeKind = null;
+  }
+  items = await listItems(searchInput.value.trim(), activeKind);
   if (selectedIndex >= items.length) selectedIndex = Math.max(0, items.length - 1);
+  renderTabs();
   renderList();
 }
 
-function renderCategories(): void {
-  categoriesEl.innerHTML = "";
+function renderTabs(): void {
+  tabsEl.innerHTML = "";
+
+  const total = kinds.reduce((sum, k) => sum + k.count, 0);
   const all = document.createElement("button");
-  all.textContent = "Tous";
-  all.className = activeCategory === null ? "chip active" : "chip";
+  all.className = activeKind === null ? "chip active" : "chip";
+  all.textContent = total > 0 ? `Tous (${total})` : "Tous";
   all.addEventListener("click", () => {
-    activeCategory = null;
+    activeKind = null;
     selectedIndex = 0;
-    renderCategories();
     void refresh();
   });
-  categoriesEl.appendChild(all);
+  tabsEl.appendChild(all);
 
-  for (const cat of categories) {
+  // Un onglet par type présent dans l'historique, les plus fournis d'abord
+  for (const kc of kinds) {
+    const meta = kindMeta(kc.kind);
     const btn = document.createElement("button");
-    btn.textContent = cat.name;
-    btn.className = activeCategory === cat.id ? "chip active" : "chip";
+    btn.className = activeKind === kc.kind ? "chip active" : "chip";
+    btn.textContent = `${meta.icon} ${meta.label} (${kc.count})`;
     btn.addEventListener("click", () => {
-      activeCategory = activeCategory === cat.id ? null : cat.id;
+      activeKind = activeKind === kc.kind ? null : kc.kind;
       selectedIndex = 0;
-      renderCategories();
       void refresh();
     });
-    categoriesEl.appendChild(btn);
+    tabsEl.appendChild(btn);
   }
 }
 
@@ -97,19 +115,28 @@ function renderList(): void {
       pin.textContent = "⭐";
       meta.appendChild(pin);
     }
-    const catName = categoryName(item.category_id);
-    if (catName) {
-      const badge = document.createElement("span");
-      badge.className = "badge cat-badge";
-      badge.textContent = catName;
-      meta.appendChild(badge);
+
+    const kindBadge = document.createElement("span");
+    kindBadge.className = "badge kind-badge";
+    const km = kindMeta(item.kind);
+    if (item.kind === "color") {
+      // Pastille de la couleur réelle à côté du libellé
+      const swatch = document.createElement("span");
+      swatch.className = "swatch";
+      swatch.style.backgroundColor = item.content.trim();
+      kindBadge.appendChild(swatch);
+      kindBadge.appendChild(document.createTextNode(` ${km.label}`));
+    } else {
+      kindBadge.textContent = `${km.icon} ${km.label}`;
     }
+    meta.appendChild(kindBadge);
+
     const time = document.createElement("span");
     time.className = "time";
     time.textContent = relativeTime(item.created_at);
     meta.appendChild(time);
 
-    // Actions au survol : épingler, catégoriser, supprimer
+    // Actions au survol : épingler, supprimer
     const actions = document.createElement("div");
     actions.className = "actions";
 
@@ -121,27 +148,6 @@ function renderList(): void {
       void togglePin(item.id).then(refresh);
     });
     actions.appendChild(pinBtn);
-
-    const catSelect = document.createElement("select");
-    catSelect.title = "Catégorie";
-    const none = document.createElement("option");
-    none.value = "";
-    none.textContent = "—";
-    catSelect.appendChild(none);
-    for (const cat of categories) {
-      const opt = document.createElement("option");
-      opt.value = String(cat.id);
-      opt.textContent = cat.name;
-      if (item.category_id === cat.id) opt.selected = true;
-      catSelect.appendChild(opt);
-    }
-    catSelect.addEventListener("click", (e) => e.stopPropagation());
-    catSelect.addEventListener("change", (e) => {
-      e.stopPropagation();
-      const value = catSelect.value === "" ? null : Number(catSelect.value);
-      void setCategory(item.id, value).then(refresh);
-    });
-    actions.appendChild(catSelect);
 
     const delBtn = document.createElement("button");
     delBtn.title = "Supprimer";
@@ -228,8 +234,6 @@ searchInput.addEventListener("input", () => {
 });
 
 async function init(): Promise<void> {
-  categories = await listCategories();
-  renderCategories();
   await refresh();
 
   await onClipboardChanged(() => void refresh());

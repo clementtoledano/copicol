@@ -9,16 +9,16 @@ use crate::{db, AppState};
 pub fn list_items(
     state: State<AppState>,
     search: Option<String>,
-    category: Option<i64>,
+    kind: Option<String>,
 ) -> Result<Vec<db::Item>, String> {
     let conn = state.db.lock().unwrap();
-    db::list_items(&conn, search.as_deref(), category).map_err(|e| e.to_string())
+    db::list_items(&conn, search.as_deref(), kind.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn list_categories(state: State<AppState>) -> Result<Vec<db::Category>, String> {
+pub fn list_kinds(state: State<AppState>) -> Result<Vec<db::KindCount>, String> {
     let conn = state.db.lock().unwrap();
-    db::list_categories(&conn).map_err(|e| e.to_string())
+    db::list_kinds(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -31,16 +31,6 @@ pub fn toggle_pin(state: State<AppState>, id: i64) -> Result<(), String> {
 pub fn delete_item(state: State<AppState>, id: i64) -> Result<(), String> {
     let conn = state.db.lock().unwrap();
     db::delete_item(&conn, id).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn set_category(
-    state: State<AppState>,
-    id: i64,
-    category: Option<i64>,
-) -> Result<(), String> {
-    let conn = state.db.lock().unwrap();
-    db::set_category(&conn, id, category).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

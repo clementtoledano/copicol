@@ -69,8 +69,8 @@ body {
   color: var(--text-dim);
 }
 
-/* ── Catégories ─────────────────────────────────────── */
-#categories {
+/* ── Onglets automatiques par type ──────────────────── */
+#tabs {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
@@ -161,6 +161,21 @@ body {
 .pin-badge {
   background: transparent;
   padding: 0;
+}
+
+.kind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Pastille de la couleur réelle pour les éléments de type couleur */
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
 }
 
 /* ── Actions au survol ──────────────────────────────── */
