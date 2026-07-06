@@ -147,6 +147,27 @@ pub(crate) fn refresh_tray_menu(app: &AppHandle) {
     });
 }
 
+/// Aligne l'état système (registre / login items) sur la préférence stockée en
+/// base (activée par défaut). Appelé au démarrage et après un import de
+/// favoris (qui peut avoir changé la préférence). Non fatal : un environnement
+/// sans support d'autostart ne doit pas empêcher l'app de fonctionner.
+pub(crate) fn sync_autostart(app: &AppHandle) {
+    use tauri_plugin_autostart::ManagerExt;
+    let state = app.state::<AppState>();
+    let enabled = {
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db::autostart_enabled(&conn).unwrap_or(true)
+    };
+    let autolaunch = app.autolaunch();
+    let already = autolaunch.is_enabled().unwrap_or(!enabled);
+    if already != enabled {
+        let result = if enabled { autolaunch.enable() } else { autolaunch.disable() };
+        if let Err(e) = result {
+            log::warn!("copicol: démarrage automatique indisponible: {e}");
+        }
+    }
+}
+
 /// Depuis le menu du tray : place le contenu du favori dans le presse-papiers
 /// (via le thread watcher, pour ne pas le réinsérer dans l'historique) et
 /// incrémente son compteur d'usage. L'utilisateur colle ensuite (Ctrl+V).
@@ -272,16 +293,9 @@ pub fn run() {
                 log::warn!("copicol: icône de notification indisponible: {e}");
             }
 
-            // Démarrage automatique avec la session (non fatal)
-            {
-                use tauri_plugin_autostart::ManagerExt;
-                let autolaunch = app.autolaunch();
-                if !autolaunch.is_enabled().unwrap_or(false) {
-                    if let Err(e) = autolaunch.enable() {
-                        log::warn!("copicol: démarrage automatique indisponible: {e}");
-                    }
-                }
-            }
+            // Démarrage automatique avec la session, selon la préférence de
+            // l'utilisateur (activée par défaut) — non fatal
+            sync_autostart(app.handle());
 
             Ok(())
         })
@@ -327,6 +341,8 @@ pub fn run() {
             commands::quit_app,
             commands::export_favorites,
             commands::import_favorites,
+            commands::get_autostart_enabled,
+            commands::set_autostart_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de copicol");

@@ -160,6 +160,31 @@ pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+// ── Démarrage automatique ────────────────────────────────────────────
+
+/// Préférence actuelle (activée par défaut), pour cocher l'entrée du menu.
+#[tauri::command]
+pub fn get_autostart_enabled(state: State<AppState>) -> Result<bool, String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::autostart_enabled(&conn).map_err(|e| e.to_string())
+}
+
+/// Active ou désactive le démarrage automatique avec la session : mémorise le
+/// choix en base (prime sur toute tentative d'activation au démarrage) et
+/// applique immédiatement le changement au niveau du système.
+#[tauri::command]
+pub fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db::set_autostart_enabled(&conn, enabled).map_err(|e| e.to_string())?;
+    }
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    let result = if enabled { autolaunch.enable() } else { autolaunch.disable() };
+    result.map_err(|e| e.to_string())
+}
+
 // ── Import / export des favoris ─────────────────────────────────────
 
 /// Résumé d'un import, remonté à l'interface.
@@ -197,6 +222,8 @@ pub fn import_favorites(app: AppHandle, path: String) -> Result<ImportSummary, S
         db::import_favorites(&conn, &file, crate::watcher::now_unix()).map_err(|e| e.to_string())?
     };
     crate::refresh_tray_menu(&app);
+    // Le fichier importé a pu changer des préférences (ex. démarrage auto)
+    crate::sync_autostart(&app);
     let _ = app.emit("clipboard-changed", ());
     Ok(ImportSummary { imported, skipped })
 }

@@ -9,6 +9,7 @@ import {
   deleteGroup,
   deleteItem,
   exportFavorites,
+  getAutostartEnabled,
   hideWindow,
   importFavorites,
   listFavorites,
@@ -24,6 +25,7 @@ import {
   pinItem,
   quitApp,
   renameGroup,
+  setAutostartEnabled,
   setItemGroup,
   setItemKind,
   unpinItem,
@@ -75,6 +77,9 @@ type FavView = "groups" | "kinds";
 let favView: FavView = "kinds";
 // Favoris dont la carte est dépliée (aperçu visible) dans l'onglet Favoris.
 const expandedFavIds = new Set<number>();
+// Préférence de démarrage automatique avec Windows ; activée par défaut,
+// rechargée au démarrage (voir init) et à chaque ouverture du menu ☰.
+let autostartEnabled = true;
 
 const MONO_KINDS = new Set(["sql", "code", "json"]);
 
@@ -751,6 +756,20 @@ function setFavView(view: FavView): void {
   void refresh();
 }
 
+/// Bascule la préférence de démarrage automatique avec Windows. En cas
+/// d'échec (ex. plateforme sans support), la case n'est pas cochée et
+/// l'utilisateur est prévenu.
+async function toggleAutostart(): Promise<void> {
+  const next = !autostartEnabled;
+  try {
+    await setAutostartEnabled(next);
+    autostartEnabled = next;
+  } catch (err) {
+    console.error(err);
+    alert("Impossible de modifier le démarrage automatique : " + String(err));
+  }
+}
+
 /// Petit sélecteur en tête de l'onglet Favoris pour basculer entre un
 /// regroupement par catégorie auto-détectée et par dossier créé par l'utilisateur.
 function renderFavViewToggle(): void {
@@ -1020,6 +1039,13 @@ function openMainMenu(): void {
     { caption: "Historique" },
     { label: "Vider l'historique…", onClick: () => void clearHistoryFlow(), danger: true },
     "separator",
+    { caption: "Démarrage" },
+    {
+      label: "Lancer copicol au démarrage de Windows",
+      checked: autostartEnabled,
+      onClick: () => void toggleAutostart(),
+    },
+    "separator",
     { caption: "copicol" },
     { label: "Vérifier les mises à jour", onClick: () => void checkUpdatesManually() },
     { label: "À propos", onClick: () => void showAbout() },
@@ -1191,6 +1217,8 @@ async function importFavoritesFlow(): Promise<void> {
   try {
     const { imported, skipped } = await importFavorites(path);
     await refresh();
+    // Le fichier importé a pu changer des préférences (ex. démarrage auto)
+    autostartEnabled = await getAutostartEnabled().catch(() => autostartEnabled);
     const parts = [`${imported} favori(s) importé(s)`];
     if (skipped > 0) parts.push(`${skipped} ignoré(s) (déjà présents)`);
     alert(parts.join(", ") + ".");
@@ -1293,6 +1321,7 @@ async function showAbout(): Promise<void> {
 async function init(): Promise<void> {
   setupResizeHandles();
   await refresh();
+  autostartEnabled = await getAutostartEnabled().catch(() => true);
 
   menuBtn.addEventListener("click", (e) => {
     e.stopPropagation();

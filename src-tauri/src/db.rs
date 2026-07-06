@@ -41,8 +41,9 @@ fn default_kind() -> String {
     "text".to_string()
 }
 
-/// Contenu d'un fichier d'export : la liste des dossiers (par nom) et les
-/// favoris avec leur nom, catégorie, dossier et contenu.
+/// Contenu d'un fichier d'export : la liste des dossiers (par nom), les
+/// favoris avec leur nom, catégorie, dossier et contenu, et les préférences
+/// (clé/valeur, reflet de la table `settings`).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FavoritesFile {
     #[serde(default = "schema_version")]
@@ -51,6 +52,8 @@ pub struct FavoritesFile {
     pub groups: Vec<String>,
     #[serde(default)]
     pub favorites: Vec<FavoriteEntry>,
+    #[serde(default)]
+    pub settings: HashMap<String, String>,
 }
 
 /// Un favori dans le fichier d'export. `group` est le **nom** du dossier (pour
@@ -112,6 +115,10 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
         );",
     )?;
     migrate(conn)
@@ -156,7 +163,54 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )",
         [],
     )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )",
+        [],
+    )?;
     Ok(())
+}
+
+// ── Préférences (clé/valeur) ────────────────────────────────────────
+
+fn get_setting(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| {
+        r.get(0)
+    })
+    .optional()
+}
+
+fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+/// Toutes les préférences, pour l'export (clé/valeur brut de la table `settings`).
+fn list_settings(conn: &Connection) -> rusqlite::Result<HashMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    rows.collect()
+}
+
+const AUTOSTART_KEY: &str = "autostart_enabled";
+
+/// Préférence de démarrage automatique avec la session ; activée par défaut
+/// (comportement historique) tant que l'utilisateur ne l'a pas explicitement
+/// désactivée.
+pub fn autostart_enabled(conn: &Connection) -> rusqlite::Result<bool> {
+    Ok(get_setting(conn, AUTOSTART_KEY)?.map(|v| v == "1").unwrap_or(true))
+}
+
+/// Mémorise le choix de l'utilisateur pour le démarrage automatique. Ce choix
+/// prime sur toute nouvelle tentative d'activation au démarrage de l'app.
+pub fn set_autostart_enabled(conn: &Connection, enabled: bool) -> rusqlite::Result<()> {
+    set_setting(conn, AUTOSTART_KEY, if enabled { "1" } else { "0" })
 }
 
 fn backfill_kinds(conn: &Connection) -> rusqlite::Result<()> {
@@ -442,8 +496,8 @@ pub fn insert_favorite(
     Ok(changed > 0)
 }
 
-/// Construit le contenu exportable : dossiers (par nom) et favoris, chacun avec
-/// le **nom** de son dossier.
+/// Construit le contenu exportable : dossiers (par nom), favoris (chacun avec
+/// le **nom** de son dossier) et préférences (démarrage automatique…).
 pub fn export_favorites(conn: &Connection) -> rusqlite::Result<FavoritesFile> {
     let groups = list_groups(conn)?;
     let name_by_id: HashMap<i64, String> =
@@ -461,11 +515,13 @@ pub fn export_favorites(conn: &Connection) -> rusqlite::Result<FavoritesFile> {
         version: schema_version(),
         groups: groups.into_iter().map(|g| g.name).collect(),
         favorites,
+        settings: list_settings(conn)?,
     })
 }
 
-/// Fusionne les favoris d'un fichier importé : recrée les dossiers manquants et
-/// ajoute les favoris dont le contenu n'existe pas déjà. Renvoie
+/// Fusionne les favoris d'un fichier importé : recrée les dossiers manquants,
+/// ajoute les favoris dont le contenu n'existe pas déjà, et applique les
+/// préférences du fichier (écrasent les valeurs locales). Renvoie
 /// `(importés, ignorés)`. Une catégorie inconnue est re-détectée sur le contenu.
 pub fn import_favorites(
     conn: &Connection,
@@ -489,6 +545,12 @@ pub fn import_favorites(
         if !name.is_empty() {
             group_id_for(conn, name)?;
         }
+    }
+
+    // Préférences : le fichier importé (une sauvegarde volontaire de
+    // l'utilisateur) écrase les valeurs locales.
+    for (key, value) in &file.settings {
+        set_setting(conn, key, value)?;
     }
 
     let mut imported = 0;
@@ -796,16 +858,22 @@ mod tests {
         set_item_group(&src, id, Some(g)).unwrap();
         // Un dossier vide doit aussi être exporté
         create_group(&src, "Vide").unwrap();
+        // Une préférence non par défaut doit aussi être exportée
+        set_autostart_enabled(&src, false).unwrap();
 
         let file = export_favorites(&src).unwrap();
         assert_eq!(file.favorites.len(), 1);
         assert_eq!(file.favorites[0].group.as_deref(), Some("SQL"));
         assert!(file.groups.iter().any(|n| n == "Vide"));
+        assert_eq!(file.settings.get("autostart_enabled").map(String::as_str), Some("0"));
 
-        // Import dans une base neuve : recrée le dossier et range le favori dedans
+        // Import dans une base neuve : recrée le dossier, range le favori dedans
+        // et applique la préférence exportée
         let dst = open_in_memory().unwrap();
+        assert!(autostart_enabled(&dst).unwrap()); // valeur par défaut avant import
         let (imported, skipped) = import_favorites(&dst, &file, 10).unwrap();
         assert_eq!((imported, skipped), (1, 0));
+        assert!(!autostart_enabled(&dst).unwrap()); // écrasée par le fichier importé
         let favs = list_favorites(&dst, None).unwrap();
         assert_eq!(favs.len(), 1);
         assert_eq!(favs[0].label.as_deref(), Some("Requête A"));
@@ -850,5 +918,17 @@ mod tests {
             .map(|f| f.label.clone().unwrap())
             .collect();
         assert_eq!(labels, ["Ananas", "banane", "cerise"]); // A→Z, insensible à la casse
+    }
+
+    #[test]
+    fn autostart_preference_defaults_true_and_persists() {
+        let conn = open_in_memory().unwrap();
+        assert!(autostart_enabled(&conn).unwrap()); // activé par défaut
+
+        set_autostart_enabled(&conn, false).unwrap();
+        assert!(!autostart_enabled(&conn).unwrap());
+
+        set_autostart_enabled(&conn, true).unwrap();
+        assert!(autostart_enabled(&conn).unwrap());
     }
 }

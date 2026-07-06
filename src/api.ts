@@ -117,6 +117,16 @@ export function quitApp(): Promise<void> {
   return invoke("quit_app");
 }
 
+/** Préférence actuelle de démarrage automatique avec la session (activée par défaut). */
+export function getAutostartEnabled(): Promise<boolean> {
+  return invoke("get_autostart_enabled");
+}
+
+/** Active ou désactive le démarrage automatique avec la session. */
+export function setAutostartEnabled(enabled: boolean): Promise<void> {
+  return invoke("set_autostart_enabled", { enabled });
+}
+
 /** Version de l'application (depuis tauri.conf.json). */
 export function appVersion(): Promise<string> {
   return getVersion();
