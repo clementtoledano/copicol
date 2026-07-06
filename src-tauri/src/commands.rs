@@ -11,13 +11,13 @@ pub fn list_items(
     search: Option<String>,
     kind: Option<String>,
 ) -> Result<Vec<db::Item>, String> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
     db::list_items(&conn, search.as_deref(), kind.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn list_kinds(state: State<AppState>) -> Result<Vec<db::KindCount>, String> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
     db::list_kinds(&conn).map_err(|e| e.to_string())
 }
 
@@ -26,13 +26,13 @@ pub fn list_favorites(
     state: State<AppState>,
     search: Option<String>,
 ) -> Result<Vec<db::Item>, String> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
     db::list_favorites(&conn, search.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn count_favorites(state: State<AppState>) -> Result<i64, String> {
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
     db::count_favorites(&conn).map_err(|e| e.to_string())
 }
 
@@ -42,7 +42,7 @@ pub fn count_favorites(state: State<AppState>) -> Result<i64, String> {
 pub fn pin_item(app: AppHandle, id: i64, label: String) -> Result<(), String> {
     {
         let state = app.state::<AppState>();
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db::pin_item(&conn, id, &label).map_err(|e| e.to_string())?;
     }
     crate::refresh_tray_menu(&app);
@@ -54,18 +54,33 @@ pub fn pin_item(app: AppHandle, id: i64, label: String) -> Result<(), String> {
 pub fn unpin_item(app: AppHandle, id: i64) -> Result<(), String> {
     {
         let state = app.state::<AppState>();
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db::unpin_item(&conn, id).map_err(|e| e.to_string())?;
     }
     crate::refresh_tray_menu(&app);
     Ok(())
 }
 
+/// Reclasse un favori dans une autre catégorie, indépendamment de la
+/// détection automatique.
+#[tauri::command]
+pub fn set_item_kind(state: State<AppState>, id: i64, kind: String) -> Result<(), String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::set_kind(&conn, id, &kind).map_err(|e| e.to_string())
+}
+
+/// Modifie le contenu d'un favori (nom et catégorie conservés).
+#[tauri::command]
+pub fn update_item_content(state: State<AppState>, id: i64, content: String) -> Result<(), String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::update_content(&conn, id, &content).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn delete_item(app: AppHandle, id: i64) -> Result<(), String> {
     {
         let state = app.state::<AppState>();
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db::delete_item(&conn, id).map_err(|e| e.to_string())?;
     }
     crate::refresh_tray_menu(&app);
@@ -88,7 +103,7 @@ pub async fn paste_item(app: AppHandle, id: i64) -> Result<(), String> {
     let state = app.state::<AppState>();
 
     let content = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db::get_content(&conn, id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "élément introuvable".to_string())?
@@ -105,7 +120,7 @@ pub async fn paste_item(app: AppHandle, id: i64) -> Result<(), String> {
     state
         .watcher_tx
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .send(WatcherMsg::Write {
             text: content,
             ack: ack_tx,
@@ -114,24 +129,32 @@ pub async fn paste_item(app: AppHandle, id: i64) -> Result<(), String> {
     let _ = ack_rx.recv_timeout(Duration::from_secs(1));
 
     {
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
         let _ = db::mark_used(&conn, id);
     }
 
-    // Attend que le focus ait réellement quitté copicol avant de simuler
-    // Ctrl+V : sinon le collage frappe notre propre webview et déclenche
-    // le dialogue de permission presse-papiers de WebView2 sous Windows.
-    if let Some(w) = app.get_webview_window("main") {
-        for _ in 0..40 {
-            if !w.is_focused().unwrap_or(false) {
-                break;
+    // Attente du transfert de focus + simulation du collage : déplacées sur un
+    // thread bloquant dédié pour ne pas geler le runtime async (et donc les
+    // autres commandes) pendant les ~150 ms de sleep.
+    let window = app.get_webview_window("main");
+    tauri::async_runtime::spawn_blocking(move || {
+        // Attend que le focus ait réellement quitté copicol avant de simuler
+        // Ctrl+V : sinon le collage frappe notre propre webview et déclenche
+        // le dialogue de permission presse-papiers de WebView2 sous Windows.
+        if let Some(w) = window {
+            for _ in 0..40 {
+                if !w.is_focused().unwrap_or(false) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
             }
-            std::thread::sleep(Duration::from_millis(25));
         }
-    }
-    // Petite marge pour que l'application cible soit prête à recevoir la frappe
-    std::thread::sleep(Duration::from_millis(100));
-    simulate_paste();
+        // Petite marge pour que l'application cible soit prête à recevoir la frappe
+        std::thread::sleep(Duration::from_millis(100));
+        simulate_paste();
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(())
 }

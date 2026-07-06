@@ -108,15 +108,46 @@ fn backfill_kinds(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Insère un nouveau contenu (type détecté automatiquement), ou remonte
 /// l'élément existant en tête d'historique s'il a déjà été copié
-/// (dédoublonnage par hash).
+/// (dédoublonnage par hash). Un favori (`pinned = 1`) garde sa catégorie
+/// telle quelle : elle a pu être choisie manuellement via [`set_kind`], une
+/// recopie ne doit pas l'écraser silencieusement.
 pub fn insert_or_touch(conn: &Connection, content: &str, now: i64) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO items (content, hash, kind, created_at) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at,
-                                         kind = excluded.kind",
+                                         kind = CASE WHEN pinned = 1 THEN kind ELSE excluded.kind END",
         params![content, hash_content(content), detect::detect(content), now],
     )?;
     prune(conn)?;
+    Ok(())
+}
+
+/// Catégories reconnues par la détection automatique et proposées pour la
+/// reclassification manuelle d'un favori.
+pub const ALL_KINDS: [&str; 9] = [
+    "sql", "code", "url", "email", "json", "color", "phone", "path", "text",
+];
+
+/// Change la catégorie d'un élément indépendamment de la détection
+/// automatique (reclassification manuelle d'un favori).
+pub fn set_kind(conn: &Connection, id: i64, kind: &str) -> rusqlite::Result<()> {
+    if !ALL_KINDS.contains(&kind) {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "catégorie inconnue: {kind}"
+        )));
+    }
+    conn.execute("UPDATE items SET kind = ?2 WHERE id = ?1", params![id, kind])?;
+    Ok(())
+}
+
+/// Modifie le contenu d'un favori (nom et catégorie conservés). Le hash est
+/// recalculé ; échoue si un autre élément a déjà exactement ce contenu
+/// (contrainte d'unicité sur le hash).
+pub fn update_content(conn: &Connection, id: i64, content: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE items SET content = ?2, hash = ?3 WHERE id = ?1",
+        params![id, content, hash_content(content)],
+    )?;
     Ok(())
 }
 
@@ -461,6 +492,51 @@ mod tests {
         assert_eq!(count_favorites(&conn).unwrap(), 1);
         // Filtrer l'historique par type n'affiche pas le favori
         assert!(list_items(&conn, None, Some("sql")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn set_kind_reclassifies_manually_and_rejects_unknown() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch(&conn, "select id from a", 1).unwrap();
+        let id = list_items(&conn, None, None).unwrap()[0].id;
+        assert_eq!(list_items(&conn, None, None).unwrap()[0].kind, "sql");
+
+        set_kind(&conn, id, "text").unwrap();
+        assert_eq!(list_items(&conn, None, None).unwrap()[0].kind, "text");
+
+        assert!(set_kind(&conn, id, "bogus").is_err());
+        // La tentative invalide n'a pas modifié la catégorie
+        assert_eq!(list_items(&conn, None, None).unwrap()[0].kind, "text");
+    }
+
+    #[test]
+    fn pinned_item_keeps_manual_kind_on_recopy() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch(&conn, "select id from a", 1).unwrap();
+        let id = list_items(&conn, None, None).unwrap()[0].id;
+        pin_item(&conn, id, "Ma requête").unwrap();
+        set_kind(&conn, id, "text").unwrap(); // reclassification manuelle
+
+        // Recopie du même contenu : la détection donnerait "sql", mais le
+        // favori conserve sa catégorie choisie manuellement.
+        insert_or_touch(&conn, "select id from a", 2).unwrap();
+        assert_eq!(list_favorites(&conn, None).unwrap()[0].kind, "text");
+    }
+
+    #[test]
+    fn update_content_changes_content_and_hash() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch(&conn, "brouillon", 1).unwrap();
+        let id = list_items(&conn, None, None).unwrap()[0].id;
+        pin_item(&conn, id, "Mon favori").unwrap();
+
+        update_content(&conn, id, "version finale").unwrap();
+        let fav = list_favorites(&conn, None).unwrap();
+        assert_eq!(fav[0].content, "version finale");
+        assert_eq!(fav[0].label.as_deref(), Some("Mon favori"));
+
+        // Le nouveau contenu peut de nouveau être recopié sans conflit de hash
+        insert_or_touch(&conn, "version finale", 2).unwrap();
     }
 
     #[test]

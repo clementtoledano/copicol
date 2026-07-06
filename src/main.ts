@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  checkForUpdate,
   countFavorites,
   deleteItem,
   hideWindow,
@@ -10,7 +11,9 @@ import {
   onWindowShown,
   pasteItem,
   pinItem,
+  setItemKind,
   unpinItem,
+  updateItemContent,
   type Item,
   type KindCount,
 } from "./api";
@@ -34,6 +37,10 @@ const KIND_META: Record<string, { label: string; icon: string }> = {
 function kindMeta(kind: string): { label: string; icon: string } {
   return KIND_META[kind] ?? { label: kind, icon: "📄" };
 }
+
+/// Catégories proposées pour la reclassification manuelle d'un favori
+/// (miroir de `db::ALL_KINDS` côté backend).
+const ALL_KINDS = ["sql", "code", "url", "email", "json", "color", "phone", "path", "text"];
 
 let items: Item[] = [];
 let kinds: KindCount[] = [];
@@ -133,6 +140,127 @@ function promptName(current: string): Promise<string | null> {
   });
 }
 
+/// Propose les catégories connues sous forme de grille de boutons ; celle du
+/// favori est mise en évidence. Résout la catégorie choisie ou `null`
+/// (Échap, Annuler, clic dehors, ou clic sur la catégorie déjà active).
+function promptKind(current: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const box = document.createElement("div");
+    box.className = "modal";
+
+    const title = document.createElement("div");
+    title.className = "modal-title";
+    title.textContent = "Changer de catégorie";
+
+    const close = (result: string | null): void => {
+      modalOpen = false;
+      overlay.remove();
+      resolve(result);
+    };
+
+    const grid = document.createElement("div");
+    grid.className = "kind-picker";
+    for (const kind of ALL_KINDS) {
+      const meta = kindMeta(kind);
+      const btn = document.createElement("button");
+      btn.className = kind === current ? "modal-btn kind-option active" : "modal-btn kind-option";
+      btn.textContent = `${meta.icon} ${meta.label}`;
+      btn.addEventListener("click", () => close(kind === current ? null : kind));
+      grid.appendChild(btn);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const cancel = document.createElement("button");
+    cancel.className = "modal-btn";
+    cancel.textContent = "Annuler";
+    cancel.addEventListener("click", () => close(null));
+    actions.appendChild(cancel);
+
+    overlay.addEventListener("mousedown", (e) => {
+      if (e.target === overlay) close(null);
+    });
+    overlay.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(null);
+      }
+    });
+
+    box.append(title, grid, actions);
+    overlay.append(box);
+    document.body.appendChild(overlay);
+    modalOpen = true;
+  });
+}
+
+/// Édite le contenu d'un favori dans une zone de texte pré-remplie. Résout le
+/// nouveau contenu ou `null` si inchangé/vide/annulé.
+function promptContent(current: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const box = document.createElement("div");
+    box.className = "modal modal-wide";
+
+    const title = document.createElement("div");
+    title.className = "modal-title";
+    title.textContent = "Modifier le contenu";
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "modal-textarea";
+    textarea.value = current;
+    textarea.spellcheck = false;
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const cancel = document.createElement("button");
+    cancel.className = "modal-btn";
+    cancel.textContent = "Annuler";
+    const save = document.createElement("button");
+    save.className = "modal-btn primary";
+    save.textContent = "Enregistrer";
+
+    const close = (result: string | null): void => {
+      modalOpen = false;
+      overlay.remove();
+      resolve(result);
+    };
+    const trySave = (): void => {
+      const value = textarea.value;
+      close(value.trim() && value !== current ? value : null);
+    };
+
+    textarea.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(null);
+      } else if (e.key === "Enter" && e.ctrlKey) {
+        e.preventDefault();
+        trySave();
+      }
+    });
+    cancel.addEventListener("click", () => close(null));
+    save.addEventListener("click", trySave);
+    overlay.addEventListener("mousedown", (e) => {
+      if (e.target === overlay) close(null);
+    });
+
+    actions.append(cancel, save);
+    box.append(title, textarea, actions);
+    overlay.append(box);
+    document.body.appendChild(overlay);
+
+    modalOpen = true;
+    textarea.focus();
+    textarea.select();
+  });
+}
+
 /// Demande une confirmation oui/non. Résout `true` si confirmé.
 function confirmAction(message: string, confirmLabel: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -216,6 +344,32 @@ async function renameFavorite(item: Item): Promise<void> {
   if (name) {
     await pinItem(item.id, name);
     await refresh();
+  }
+}
+
+/// Reclasse un favori via la grille de catégories.
+async function changeFavoriteKind(item: Item): Promise<void> {
+  if (!item.pinned) return;
+  const kind = await promptKind(item.kind);
+  if (kind) {
+    await setItemKind(item.id, kind);
+    await refresh();
+  }
+}
+
+/// Édite le contenu d'un favori. Un conflit avec un contenu existant (même
+/// texte déjà présent ailleurs) est rare ; en cas d'échec l'utilisateur est
+/// prévenu et peut rouvrir l'édition pour corriger.
+async function editFavoriteContent(item: Item): Promise<void> {
+  if (!item.pinned) return;
+  const content = await promptContent(item.content);
+  if (content === null) return;
+  try {
+    await updateItemContent(item.id, content);
+    await refresh();
+  } catch (err) {
+    console.error(err);
+    alert("Impossible d'enregistrer : ce contenu existe déjà ailleurs dans l'historique.");
   }
 }
 
@@ -480,6 +634,8 @@ function buildFavoriteRow(item: Item, index: number): HTMLLIElement {
     actions.className = "fav-detail-actions";
     actions.appendChild(favAction("Coller", () => pasteWithFlash(index)));
     actions.appendChild(favAction("Renommer", () => void renameFavorite(item)));
+    actions.appendChild(favAction("Modifier", () => void editFavoriteContent(item)));
+    actions.appendChild(favAction("Catégorie", () => void changeFavoriteKind(item)));
     actions.appendChild(favAction("Retirer", () => void togglePinFlow(item)));
     detail.appendChild(actions);
 
@@ -650,6 +806,12 @@ async function init(): Promise<void> {
   });
 
   searchInput.focus();
+
+  // Vérification silencieuse au démarrage : une seule fois, ne bloque rien
+  // si hors ligne ou si aucune mise à jour n'est disponible.
+  void checkForUpdate((version) =>
+    confirmAction(`Mise à jour ${version} disponible. L'installer et redémarrer ?`, "Mettre à jour"),
+  );
 }
 
 void init();

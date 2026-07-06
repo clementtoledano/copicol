@@ -18,6 +18,32 @@ pub fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Taille maximale d'un contenu enregistré dans l'historique (2 Mo). Au-delà,
+/// la copie est ignorée : évite qu'un gros copier/coller (fichier, log entier)
+/// ne sature la base et le rendu de la liste.
+const MAX_CONTENT_LEN: usize = 2 * 1024 * 1024;
+
+/// Beaucoup de gestionnaires de mots de passe (KeePass, Bitwarden, 1Password…)
+/// posent ce format Windows standard sur le presse-papiers pour signaler aux
+/// gestionnaires d'historique de ne pas capturer la copie. On le respecte pour
+/// ne jamais stocker un mot de passe en clair dans la base.
+#[cfg(windows)]
+fn clipboard_marked_sensitive() -> bool {
+    let Some(format) = clipboard_win::register_format("ExcludeClipboardContentFromMonitorProcessing")
+    else {
+        return false;
+    };
+    match clipboard_win::Clipboard::new_attempts(3) {
+        Ok(_clip) => clipboard_win::is_format_avail(format.get()),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(windows))]
+fn clipboard_marked_sensitive() -> bool {
+    false
+}
+
 /// Démarre le thread de surveillance : il est l'unique propriétaire de
 /// l'objet presse-papiers. Toutes les ~400 ms il lit le contenu ; entre
 /// deux ticks il traite les demandes d'écriture venant des commandes.
@@ -28,7 +54,7 @@ pub fn start(app: AppHandle, rx: Receiver<WatcherMsg>) {
         let mut clipboard = match arboard::Clipboard::new() {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("copicol: impossible d'accéder au presse-papiers: {e}");
+                log::error!("copicol: impossible d'accéder au presse-papiers: {e}");
                 return;
             }
         };
@@ -44,6 +70,9 @@ pub fn start(app: AppHandle, rx: Receiver<WatcherMsg>) {
                     let _ = ack.send(());
                 }
                 Err(RecvTimeoutError::Timeout) => {
+                    if clipboard_marked_sensitive() {
+                        continue;
+                    }
                     let Ok(text) = clipboard.get_text() else {
                         continue;
                     };
@@ -56,16 +85,21 @@ pub fn start(app: AppHandle, rx: Receiver<WatcherMsg>) {
                     }
                     last_hash = Some(hash);
 
+                    if text.len() > MAX_CONTENT_LEN {
+                        log::warn!("copicol: copie ignorée, contenu trop volumineux ({} octets)", text.len());
+                        continue;
+                    }
+
                     let state = app.state::<AppState>();
                     let inserted = {
-                        let conn = state.db.lock().unwrap();
+                        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
                         db::insert_or_touch(&conn, &text, now_unix())
                     };
                     match inserted {
                         Ok(()) => {
                             let _ = app.emit("clipboard-changed", ());
                         }
-                        Err(e) => eprintln!("copicol: erreur d'insertion: {e}"),
+                        Err(e) => log::error!("copicol: erreur d'insertion: {e}"),
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => break,

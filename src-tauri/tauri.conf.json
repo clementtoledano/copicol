@@ -28,12 +28,13 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data:"
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,5 +42,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQxNjk1NDkyRjc5RjRENQpSV1RWOUhrdlNaVVdEWWl4T09oVUJEakllZzY0cURuTlFFb1ZxQzlST1E1U3ZPQ05uSEhsMFlZQgo=",
+      "endpoints": [
+        "https://github.com/clementtoledano/copicol/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

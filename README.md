@@ -91,6 +91,41 @@ Chaque push déclenche le workflow GitHub Actions `build` qui produit
 l'installeur Windows (`.msi` et `.exe`) en artefact — téléchargeable depuis
 l'onglet **Actions** du dépôt.
 
+## Publier une release (mise à jour automatique)
+
+L'application vérifie au démarrage si une nouvelle version est publiée sur
+GitHub Releases ([tauri-plugin-updater](https://v2.tauri.app/plugin/updater/))
+et propose de l'installer.
+
+Pour publier une version :
+
+1. Bumper la version dans les 3 fichiers (`package.json`, `src-tauri/Cargo.toml`,
+   `src-tauri/tauri.conf.json`).
+2. Committer, puis créer et pousser un tag `vX.Y.Z` :
+   ```bash
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+3. Le workflow `release` construit l'installeur, le signe et publie une
+   **Release GitHub en brouillon** (avec `latest.json`, le manifeste lu par
+   l'updater) — à valider/publier manuellement depuis l'onglet Releases.
+
+Secrets requis dans **Settings → Secrets and variables → Actions** du dépôt :
+
+| Secret | Rôle |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | Clé privée de signature des mises à jour |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Mot de passe de cette clé |
+
+Génération d'une nouvelle paire de clés (si besoin de la régénérer) :
+
+```bash
+npm run tauri signer generate -- -w ~/.tauri/copicol.key
+```
+
+La clé publique générée doit alors remplacer `plugins.updater.pubkey` dans
+`src-tauri/tauri.conf.json`. **Ne jamais committer la clé privée.**
+
 ## Feuille de route (V2+)
 
 - Aperçu des images

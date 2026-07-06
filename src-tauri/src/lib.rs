@@ -69,7 +69,7 @@ fn tray_label_fallback(content: &str) -> String {
 fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let favorites = {
         let state = app.state::<AppState>();
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db::list_favorites(&conn, None).unwrap_or_default()
     };
 
@@ -116,7 +116,7 @@ pub(crate) fn refresh_tray_menu(app: &AppHandle) {
 fn copy_favorite_to_clipboard(app: &AppHandle, id: i64) {
     let state = app.state::<AppState>();
     let content = {
-        let conn = state.db.lock().unwrap();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
         match db::get_content(&conn, id) {
             Ok(Some(c)) => c,
             _ => return,
@@ -127,7 +127,7 @@ fn copy_favorite_to_clipboard(app: &AppHandle, id: i64) {
     if state
         .watcher_tx
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .send(WatcherMsg::Write {
             text: content,
             ack: ack_tx,
@@ -137,7 +137,7 @@ fn copy_favorite_to_clipboard(app: &AppHandle, id: i64) {
         let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(1));
     }
 
-    let conn = state.db.lock().unwrap();
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let _ = db::mark_used(&conn, id);
 }
 
@@ -178,6 +178,13 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn run() {
     tauri::Builder::default()
+        // Journalisation fichier (AppData/logs) + stdout en dev — indispensable
+        // pour diagnostiquer un problème une fois l'app installée (pas de console).
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         // Relancer l'exe affiche la fenêtre existante au lieu d'un doublon
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
@@ -186,6 +193,9 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // Mises à jour automatiques (GitHub Releases, cf. .github/workflows/release.yml)
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // Mémorise taille et position (pas la visibilité : démarrage caché)
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -211,10 +221,10 @@ pub fn run() {
             // Raccourci global et tray : non fatals — sans eux l'app reste
             // utilisable (ex. environnements Wayland ou sans zone de notification)
             if let Err(e) = register_shortcut(app.handle()) {
-                eprintln!("copicol: raccourci global indisponible: {e}");
+                log::warn!("copicol: raccourci global indisponible: {e}");
             }
             if let Err(e) = build_tray(app) {
-                eprintln!("copicol: icône de notification indisponible: {e}");
+                log::warn!("copicol: icône de notification indisponible: {e}");
             }
 
             // Démarrage automatique avec la session (non fatal)
@@ -223,7 +233,7 @@ pub fn run() {
                 let autolaunch = app.autolaunch();
                 if !autolaunch.is_enabled().unwrap_or(false) {
                     if let Err(e) = autolaunch.enable() {
-                        eprintln!("copicol: démarrage automatique indisponible: {e}");
+                        log::warn!("copicol: démarrage automatique indisponible: {e}");
                     }
                 }
             }
@@ -259,6 +269,8 @@ pub fn run() {
             commands::paste_item,
             commands::pin_item,
             commands::unpin_item,
+            commands::set_item_kind,
+            commands::update_item_content,
             commands::delete_item,
             commands::hide_window,
         ])

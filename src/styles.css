@@ -282,6 +282,44 @@ mark {
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
 }
 
+.modal.modal-wide {
+  max-width: 420px;
+}
+
+.modal-textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  outline: none;
+  resize: vertical;
+  min-height: 140px;
+  max-height: 320px;
+}
+
+.modal-textarea:focus {
+  border-color: var(--accent);
+}
+
+.kind-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.kind-option {
+  font-size: 11px;
+  padding: 6px 4px;
+}
+
+.kind-option.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .modal-title {
   font-size: 13px;
   font-weight: 600;
