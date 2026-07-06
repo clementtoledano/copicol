@@ -45,7 +45,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQxNjk1NDkyRjc5RjRENQpSV1RWOUhrdlNaVVdEWWl4T09oVUJEakllZzY0cURuTlFFb1ZxQzlST1E1U3ZPQ05uSEhsMFlZQgo=",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg2MENGNDJFODFENTM1NzcKUldSM05kV0JMdlFNaG9UTU1yK0g2bTJmRG1pczBIVi9yWXNhdDVaVW5abVhETEp2VGcxcHhQUjcK",
       "endpoints": [
         "https://github.com/clementtoledano/copicol/releases/latest/download/latest.json"
       ]

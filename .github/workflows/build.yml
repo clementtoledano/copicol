@@ -1,9 +1,11 @@
 name: build
 
+# Ne filtre que sur les branches : les push de tags `v*` sont ainsi couverts
+# par release.yml seul (un filtre de branches exclut les événements de tag).
 on:
   push:
-    tags-ignore:
-      - "v*" # géré par release.yml
+    branches:
+      - "**"
   workflow_dispatch:
 
 jobs:
