@@ -1,3 +1,4 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -8,6 +9,8 @@ export interface Item {
   pinned: boolean;
   /** Nom descriptif du favori ; null tant qu'il n'a jamais été nommé. */
   label: string | null;
+  /** Dossier du favori ; null = « sans dossier ». */
+  group_id: number | null;
   created_at: number;
   use_count: number;
 }
@@ -15,6 +18,12 @@ export interface Item {
 export interface KindCount {
   kind: string;
   count: number;
+}
+
+/** Un dossier de favoris créé par l'utilisateur. */
+export interface Group {
+  id: number;
+  name: string;
 }
 
 export function listItems(search: string, kind: string | null): Promise<Item[]> {
@@ -38,8 +47,9 @@ export function countFavorites(): Promise<number> {
   return invoke("count_favorites");
 }
 
-export function pasteItem(id: number): Promise<void> {
-  return invoke("paste_item", { id });
+/** Copie l'élément dans le presse-papiers et cache la fenêtre (pas de collage auto). */
+export function copyItem(id: number): Promise<void> {
+  return invoke("copy_item", { id });
 }
 
 /** Épingle l'élément avec un nom descriptif (obligatoire) ; sert aussi à renommer. */
@@ -70,6 +80,94 @@ export function hideWindow(): Promise<void> {
   return invoke("hide_window");
 }
 
+// ── Dossiers de favoris ─────────────────────────────────────────────
+
+/** Liste les dossiers de favoris, classés par nom. */
+export function listGroups(): Promise<Group[]> {
+  return invoke("list_groups");
+}
+
+/** Crée un dossier (ou renvoie l'existant) et retourne son identifiant. */
+export function createGroup(name: string): Promise<number> {
+  return invoke("create_group", { name });
+}
+
+/** Renomme un dossier. */
+export function renameGroup(id: number, name: string): Promise<void> {
+  return invoke("rename_group", { id, name });
+}
+
+/** Supprime un dossier ; ses favoris repassent « sans dossier ». */
+export function deleteGroup(id: number): Promise<void> {
+  return invoke("delete_group", { id });
+}
+
+/** Affecte un favori à un dossier (ou l'en retire avec `groupId = null`). */
+export function setItemGroup(id: number, groupId: number | null): Promise<void> {
+  return invoke("set_item_group", { id, groupId });
+}
+
+/** Vide l'historique (les favoris sont conservés). */
+export function clearHistory(): Promise<void> {
+  return invoke("clear_history");
+}
+
+/** Quitte complètement l'application. */
+export function quitApp(): Promise<void> {
+  return invoke("quit_app");
+}
+
+/** Version de l'application (depuis tauri.conf.json). */
+export function appVersion(): Promise<string> {
+  return getVersion();
+}
+
+/** S'abonne à la demande d'ouverture de la fenêtre « À propos » (depuis le tray). */
+export function onShowAbout(cb: () => void): Promise<UnlistenFn> {
+  return listen("show-about", cb);
+}
+
+/** Ouvre une URL dans le navigateur par défaut. */
+export async function openUrl(url: string): Promise<void> {
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+  await openUrl(url);
+}
+
+// ── Import / export des favoris ─────────────────────────────────────
+
+/** Résumé d'un import : favoris ajoutés et favoris ignorés (déjà présents). */
+export interface ImportSummary {
+  imported: number;
+  skipped: number;
+}
+
+/** Exporte les favoris (JSON) dans `path` ; renvoie le nombre exporté. */
+export function exportFavorites(path: string): Promise<number> {
+  return invoke("export_favorites", { path });
+}
+
+/** Importe/fusionne les favoris depuis le fichier JSON `path`. */
+export function importFavorites(path: string): Promise<ImportSummary> {
+  return invoke("import_favorites", { path });
+}
+
+/** Boîte « Enregistrer sous… » filtrée sur .json ; renvoie le chemin ou null. */
+export async function pickSavePath(defaultName: string): Promise<string | null> {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  return save({ defaultPath: defaultName, filters: [{ name: "JSON", extensions: ["json"] }] });
+}
+
+/** Boîte « Ouvrir… » filtrée sur .json ; renvoie le chemin ou null. */
+export async function pickOpenPath(): Promise<string | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const result = await open({
+    multiple: false,
+    directory: false,
+    filters: [{ name: "JSON", extensions: ["json"] }],
+  });
+  return typeof result === "string" ? result : null;
+}
+
 export function onClipboardChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("clipboard-changed", cb);
 }
@@ -83,6 +181,10 @@ export function onWindowShown(cb: () => void): Promise<UnlistenFn> {
 /// n'est disponible ou si la vérification échoue (ex. hors ligne).
 export async function checkForUpdate(
   confirmInstall: (version: string, notes: string) => Promise<boolean>,
+  /** Appelé lors d'une vérification manuelle : `true` = aucune mise à jour,
+   *  `false` = la vérification a échoué (hors ligne…). Absent au démarrage,
+   *  où l'absence de mise à jour reste silencieuse. */
+  onNoUpdate?: (upToDate: boolean) => void,
 ): Promise<void> {
   const { check } = await import("@tauri-apps/plugin-updater");
   const { relaunch } = await import("@tauri-apps/plugin-process");
@@ -91,9 +193,13 @@ export async function checkForUpdate(
   try {
     update = await check();
   } catch {
-    return; // pas de connexion, ou releases GitHub indisponibles : silencieux
+    onNoUpdate?.(false); // pas de connexion, ou releases GitHub indisponibles
+    return;
   }
-  if (!update) return;
+  if (!update) {
+    onNoUpdate?.(true);
+    return;
+  }
 
   const proceed = await confirmInstall(update.version, update.body ?? "");
   if (!proceed) return;

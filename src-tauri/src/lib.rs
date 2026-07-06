@@ -63,14 +63,18 @@ fn tray_label_fallback(content: &str) -> String {
     }
 }
 
-/// Construit le menu du tray : Afficher, sous-menu « Favoris » (un item par
-/// favori, id « fav:<id> »), Quitter. Les favoris sont lus en base — donc
-/// présents dès le démarrage, avant même l'ouverture de la fenêtre.
+/// Construit le menu du tray : Afficher, sous-menu « Favoris » (favoris
+/// regroupés par dossier, chaque favori portant l'id « fav:<id> »), À propos,
+/// Quitter. Les favoris et dossiers sont lus en base — donc présents dès le
+/// démarrage, avant même l'ouverture de la fenêtre.
 fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let favorites = {
+    let (favorites, groups) = {
         let state = app.state::<AppState>();
         let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        db::list_favorites(&conn, None).unwrap_or_default()
+        (
+            db::list_favorites(&conn, None).unwrap_or_default(),
+            db::list_groups(&conn).unwrap_or_default(),
+        )
     };
 
     let mut fav = SubmenuBuilder::new(app, "Favoris");
@@ -78,12 +82,44 @@ fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         let none = MenuItem::with_id(app, "fav_none", "(aucun favori)", false, None::<&str>)?;
         fav = fav.item(&none);
     } else {
-        for f in favorites {
-            let name = f
-                .label
+        let fav_entry = |f: &db::Item| -> String {
+            f.label
+                .clone()
                 .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| tray_label_fallback(&f.content));
-            fav = fav.text(format!("fav:{}", f.id), name);
+                .unwrap_or_else(|| tray_label_fallback(&f.content))
+        };
+        let mut first_section = true;
+        // Une section par dossier (dans l'ordre des dossiers), les favoris sans
+        // dossier en dernier. Un en-tête désactivé introduit chaque section dès
+        // qu'il existe au moins un dossier.
+        for g in &groups {
+            let members: Vec<&db::Item> =
+                favorites.iter().filter(|f| f.group_id == Some(g.id)).collect();
+            if members.is_empty() {
+                continue;
+            }
+            if !first_section {
+                fav = fav.separator();
+            }
+            first_section = false;
+            let header =
+                MenuItem::with_id(app, format!("grp:{}", g.id), &g.name, false, None::<&str>)?;
+            fav = fav.item(&header);
+            for f in members {
+                fav = fav.text(format!("fav:{}", f.id), fav_entry(f));
+            }
+        }
+        let ungrouped: Vec<&db::Item> = favorites.iter().filter(|f| f.group_id.is_none()).collect();
+        if !ungrouped.is_empty() {
+            if !first_section {
+                fav = fav.separator();
+                let header =
+                    MenuItem::with_id(app, "grp_none", "Sans dossier", false, None::<&str>)?;
+                fav = fav.item(&header);
+            }
+            for f in ungrouped {
+                fav = fav.text(format!("fav:{}", f.id), fav_entry(f));
+            }
         }
     }
     let fav = fav.build()?;
@@ -92,6 +128,7 @@ fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .text("show", "Afficher")
         .item(&fav)
         .separator()
+        .text("about", "À propos de copicol")
         .text("quit", "Quitter")
         .build()
 }
@@ -155,6 +192,10 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_window(app),
+            "about" => {
+                show_window(app);
+                let _ = app.emit("show-about", ());
+            }
             "quit" => app.exit(0),
             other => {
                 if let Some(fid) = other.strip_prefix("fav:").and_then(|s| s.parse::<i64>().ok()) {
@@ -196,6 +237,10 @@ pub fn run() {
         // Mises à jour automatiques (GitHub Releases, cf. .github/workflows/release.yml)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Ouverture de liens externes (dépôt GitHub depuis « À propos »)
+        .plugin(tauri_plugin_opener::init())
+        // Boîtes de dialogue fichier (import/export des favoris)
+        .plugin(tauri_plugin_dialog::init())
         // Mémorise taille et position (pas la visibilité : démarrage caché)
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -266,13 +311,22 @@ pub fn run() {
             commands::list_kinds,
             commands::list_favorites,
             commands::count_favorites,
-            commands::paste_item,
+            commands::copy_item,
             commands::pin_item,
             commands::unpin_item,
             commands::set_item_kind,
             commands::update_item_content,
             commands::delete_item,
             commands::hide_window,
+            commands::list_groups,
+            commands::create_group,
+            commands::rename_group,
+            commands::delete_group,
+            commands::set_item_group,
+            commands::clear_history,
+            commands::quit_app,
+            commands::export_favorites,
+            commands::import_favorites,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de copicol");

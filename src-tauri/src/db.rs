@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::Path;
 
 use crate::detect;
@@ -17,8 +18,52 @@ pub struct Item {
     /// Nom descriptif donné par l'utilisateur au moment de l'épinglage.
     /// `None` pour les éléments jamais épinglés ; conservé après désépinglage.
     pub label: Option<String>,
+    /// Dossier auquel appartient le favori ; `None` = « sans dossier ».
+    /// N'a de sens que pour les favoris épinglés.
+    pub group_id: Option<i64>,
     pub created_at: i64,
     pub use_count: i64,
+}
+
+/// Un dossier de favoris créé par l'utilisateur.
+#[derive(Serialize, Debug, Clone)]
+pub struct Group {
+    pub id: i64,
+    pub name: String,
+}
+
+// ── Import / export des favoris (fichier JSON) ──────────────────────
+
+fn schema_version() -> u32 {
+    1
+}
+fn default_kind() -> String {
+    "text".to_string()
+}
+
+/// Contenu d'un fichier d'export : la liste des dossiers (par nom) et les
+/// favoris avec leur nom, catégorie, dossier et contenu.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FavoritesFile {
+    #[serde(default = "schema_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub groups: Vec<String>,
+    #[serde(default)]
+    pub favorites: Vec<FavoriteEntry>,
+}
+
+/// Un favori dans le fichier d'export. `group` est le **nom** du dossier (pour
+/// rester lisible et indépendant des identifiants internes).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FavoriteEntry {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default = "default_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub group: Option<String>,
+    pub content: String,
 }
 
 /// Un type de contenu présent dans l'historique, avec son nombre d'éléments.
@@ -58,10 +103,16 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
             pinned INTEGER NOT NULL DEFAULT 0,
             kind TEXT NOT NULL DEFAULT 'text',
             label TEXT,
+            group_id INTEGER,
             created_at INTEGER NOT NULL,
             use_count INTEGER NOT NULL DEFAULT 0
         );
-        CREATE INDEX IF NOT EXISTS idx_items_order ON items(pinned DESC, created_at DESC);",
+        CREATE INDEX IF NOT EXISTS idx_items_order ON items(pinned DESC, created_at DESC);
+        CREATE TABLE IF NOT EXISTS groups (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL
+        );",
     )?;
     migrate(conn)
 }
@@ -89,6 +140,22 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if !has_label {
         conn.execute("ALTER TABLE items ADD COLUMN label TEXT", [])?;
     }
+
+    // Dossiers de favoris : colonne `group_id` sur items + table `groups`.
+    let has_group = conn
+        .prepare("SELECT 1 FROM pragma_table_info('items') WHERE name = 'group_id'")?
+        .exists([])?;
+    if !has_group {
+        conn.execute("ALTER TABLE items ADD COLUMN group_id INTEGER", [])?;
+    }
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS groups (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
     Ok(())
 }
 
@@ -167,7 +234,7 @@ fn escape_like(term: &str) -> String {
     term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
-const ITEM_COLUMNS: &str = "id, content, kind, pinned, label, created_at, use_count";
+const ITEM_COLUMNS: &str = "id, content, kind, pinned, label, group_id, created_at, use_count";
 
 fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<Item> {
     Ok(Item {
@@ -176,8 +243,9 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<Item> {
         kind: row.get(2)?,
         pinned: row.get::<_, i64>(3)? != 0,
         label: row.get(4)?,
-        created_at: row.get(5)?,
-        use_count: row.get(6)?,
+        group_id: row.get(5)?,
+        created_at: row.get(6)?,
+        use_count: row.get(7)?,
     })
 }
 
@@ -296,6 +364,157 @@ pub fn unpin_item(conn: &Connection, id: i64) -> rusqlite::Result<()> {
 pub fn delete_item(conn: &Connection, id: i64) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM items WHERE id = ?1", params![id])?;
     Ok(())
+}
+
+/// Vide l'historique : supprime tous les éléments **non épinglés**. Les favoris
+/// (et donc les dossiers) sont conservés.
+pub fn clear_history(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM items WHERE pinned = 0", [])?;
+    Ok(())
+}
+
+// ── Dossiers de favoris ─────────────────────────────────────────────
+
+/// Liste les dossiers, classés par nom (insensible à la casse).
+pub fn list_groups(conn: &Connection) -> rusqlite::Result<Vec<Group>> {
+    let mut stmt = conn.prepare("SELECT id, name FROM groups ORDER BY name COLLATE NOCASE")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Group {
+            id: row.get(0)?,
+            name: row.get(1)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Crée un dossier et renvoie son identifiant. Si le nom existe déjà
+/// (insensible à la casse via la contrainte UNIQUE), renvoie l'id existant.
+pub fn create_group(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO groups (name, created_at) VALUES (?1, ?2)
+         ON CONFLICT(name) DO NOTHING",
+        params![name, crate::watcher::now_unix()],
+    )?;
+    conn.query_row("SELECT id FROM groups WHERE name = ?1", params![name], |r| {
+        r.get(0)
+    })
+}
+
+/// Renomme un dossier.
+pub fn rename_group(conn: &Connection, id: i64, name: &str) -> rusqlite::Result<()> {
+    conn.execute("UPDATE groups SET name = ?2 WHERE id = ?1", params![id, name])?;
+    Ok(())
+}
+
+/// Supprime un dossier ; ses favoris repassent « sans dossier » (group_id = NULL).
+pub fn delete_group(conn: &Connection, id: i64) -> rusqlite::Result<()> {
+    conn.execute("UPDATE items SET group_id = NULL WHERE group_id = ?1", params![id])?;
+    conn.execute("DELETE FROM groups WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// Affecte un favori à un dossier, ou l'en retire (`group_id = None`).
+pub fn set_item_group(conn: &Connection, id: i64, group_id: Option<i64>) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE items SET group_id = ?2 WHERE id = ?1",
+        params![id, group_id],
+    )?;
+    Ok(())
+}
+
+/// Insère un favori (épinglé) avec ses métadonnées explicites. Renvoie `true`
+/// si le favori a été créé, `false` si un élément avec ce contenu existait déjà
+/// (dédoublonnage par hash — sert à la fusion lors de l'import).
+pub fn insert_favorite(
+    conn: &Connection,
+    content: &str,
+    label: Option<&str>,
+    kind: &str,
+    group_id: Option<i64>,
+    now: i64,
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "INSERT INTO items (content, hash, kind, pinned, label, group_id, created_at)
+         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)
+         ON CONFLICT(hash) DO NOTHING",
+        params![content, hash_content(content), kind, label, group_id, now],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Construit le contenu exportable : dossiers (par nom) et favoris, chacun avec
+/// le **nom** de son dossier.
+pub fn export_favorites(conn: &Connection) -> rusqlite::Result<FavoritesFile> {
+    let groups = list_groups(conn)?;
+    let name_by_id: HashMap<i64, String> =
+        groups.iter().map(|g| (g.id, g.name.clone())).collect();
+    let favorites = list_favorites(conn, None)?
+        .into_iter()
+        .map(|f| FavoriteEntry {
+            group: f.group_id.and_then(|id| name_by_id.get(&id).cloned()),
+            label: f.label,
+            kind: f.kind,
+            content: f.content,
+        })
+        .collect();
+    Ok(FavoritesFile {
+        version: schema_version(),
+        groups: groups.into_iter().map(|g| g.name).collect(),
+        favorites,
+    })
+}
+
+/// Fusionne les favoris d'un fichier importé : recrée les dossiers manquants et
+/// ajoute les favoris dont le contenu n'existe pas déjà. Renvoie
+/// `(importés, ignorés)`. Une catégorie inconnue est re-détectée sur le contenu.
+pub fn import_favorites(
+    conn: &Connection,
+    file: &FavoritesFile,
+    now: i64,
+) -> rusqlite::Result<(usize, usize)> {
+    // Cache nom → id des dossiers, en créant ceux qui manquent.
+    let mut group_id_by_name: HashMap<String, i64> = HashMap::new();
+    let mut group_id_for = |conn: &Connection, name: &str| -> rusqlite::Result<i64> {
+        if let Some(id) = group_id_by_name.get(name) {
+            return Ok(*id);
+        }
+        let id = create_group(conn, name)?;
+        group_id_by_name.insert(name.to_string(), id);
+        Ok(id)
+    };
+
+    // Les dossiers explicitement listés sont créés même s'ils n'ont aucun favori.
+    for name in &file.groups {
+        let name = name.trim();
+        if !name.is_empty() {
+            group_id_for(conn, name)?;
+        }
+    }
+
+    let mut imported = 0;
+    let mut skipped = 0;
+    for fav in &file.favorites {
+        if fav.content.trim().is_empty() {
+            skipped += 1;
+            continue;
+        }
+        let group_id = match fav.group.as_deref().map(str::trim) {
+            Some(name) if !name.is_empty() => Some(group_id_for(conn, name)?),
+            _ => None,
+        };
+        let kind = if ALL_KINDS.contains(&fav.kind.as_str()) {
+            fav.kind.clone()
+        } else {
+            detect::detect(&fav.content).to_string()
+        };
+        let label = fav.label.as_deref().filter(|s| !s.trim().is_empty());
+        if insert_favorite(conn, &fav.content, label, &kind, group_id, now)? {
+            imported += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+    Ok((imported, skipped))
 }
 
 #[cfg(test)]
@@ -537,6 +756,82 @@ mod tests {
 
         // Le nouveau contenu peut de nouveau être recopié sans conflit de hash
         insert_or_touch(&conn, "version finale", 2).unwrap();
+    }
+
+    #[test]
+    fn groups_crud_and_membership() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch(&conn, "requête A", 1).unwrap();
+        let id = list_items(&conn, None, None).unwrap()[0].id;
+        pin_item(&conn, id, "Requête A").unwrap();
+
+        // Création (idempotente sur le nom)
+        let g1 = create_group(&conn, "SQL").unwrap();
+        assert_eq!(create_group(&conn, "SQL").unwrap(), g1); // même nom → même id
+        assert_eq!(list_groups(&conn).unwrap().len(), 1);
+
+        // Affectation
+        set_item_group(&conn, id, Some(g1)).unwrap();
+        assert_eq!(list_favorites(&conn, None).unwrap()[0].group_id, Some(g1));
+
+        // Renommage
+        rename_group(&conn, g1, "Requêtes SQL").unwrap();
+        assert_eq!(list_groups(&conn).unwrap()[0].name, "Requêtes SQL");
+
+        // Suppression du dossier : le favori survit, sans dossier
+        delete_group(&conn, g1).unwrap();
+        assert!(list_groups(&conn).unwrap().is_empty());
+        let fav = list_favorites(&conn, None).unwrap();
+        assert_eq!(fav.len(), 1);
+        assert_eq!(fav[0].group_id, None);
+    }
+
+    #[test]
+    fn export_import_roundtrip_with_groups_and_dedupe() {
+        let src = open_in_memory().unwrap();
+        insert_or_touch(&src, "select * from a", 1).unwrap();
+        let id = list_items(&src, None, None).unwrap()[0].id;
+        pin_item(&src, id, "Requête A").unwrap();
+        let g = create_group(&src, "SQL").unwrap();
+        set_item_group(&src, id, Some(g)).unwrap();
+        // Un dossier vide doit aussi être exporté
+        create_group(&src, "Vide").unwrap();
+
+        let file = export_favorites(&src).unwrap();
+        assert_eq!(file.favorites.len(), 1);
+        assert_eq!(file.favorites[0].group.as_deref(), Some("SQL"));
+        assert!(file.groups.iter().any(|n| n == "Vide"));
+
+        // Import dans une base neuve : recrée le dossier et range le favori dedans
+        let dst = open_in_memory().unwrap();
+        let (imported, skipped) = import_favorites(&dst, &file, 10).unwrap();
+        assert_eq!((imported, skipped), (1, 0));
+        let favs = list_favorites(&dst, None).unwrap();
+        assert_eq!(favs.len(), 1);
+        assert_eq!(favs[0].label.as_deref(), Some("Requête A"));
+        assert_eq!(favs[0].kind, "sql");
+        let groups = list_groups(&dst).unwrap();
+        let sql_id = groups.iter().find(|x| x.name == "SQL").map(|x| x.id);
+        assert_eq!(favs[0].group_id, sql_id);
+        assert!(groups.iter().any(|x| x.name == "Vide"));
+
+        // Réimport : le contenu existe déjà → ignoré (fusion)
+        let (imported2, skipped2) = import_favorites(&dst, &file, 11).unwrap();
+        assert_eq!((imported2, skipped2), (0, 1));
+        assert_eq!(list_favorites(&dst, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn clear_history_keeps_favorites() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch(&conn, "jetable", 1).unwrap();
+        insert_or_touch(&conn, "à garder", 2).unwrap();
+        let keep = list_items(&conn, None, None).unwrap()[0].id;
+        pin_item(&conn, keep, "Gardé").unwrap();
+
+        clear_history(&conn).unwrap();
+        assert!(list_items(&conn, None, None).unwrap().is_empty());
+        assert_eq!(list_favorites(&conn, None).unwrap().len(), 1);
     }
 
     #[test]

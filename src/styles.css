@@ -70,6 +70,23 @@ body {
   color: var(--text-dim);
 }
 
+/* Bouton du menu principal (☰) dans la barre de recherche */
+#menu-btn {
+  flex: none;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 6px 2px 6px 8px;
+  transition: color 0.12s;
+}
+
+#menu-btn:hover {
+  color: var(--text);
+}
+
 /* ── Onglets automatiques par type ──────────────────── */
 #tabs {
   display: flex;
@@ -132,13 +149,13 @@ body {
   border-left: 3px solid var(--accent);
 }
 
-/* Flash de confirmation quand l'élément part au collage */
-.item.pasting {
-  animation: paste-flash 0.12s ease;
+/* Flash de confirmation quand l'élément est copié dans le presse-papiers */
+.item.copying {
+  animation: copy-flash 0.12s ease;
   border-color: var(--accent);
 }
 
-@keyframes paste-flash {
+@keyframes copy-flash {
   from {
     background: var(--accent);
   }
@@ -521,6 +538,20 @@ kbd {
   text-overflow: ellipsis;
 }
 
+/* Tag de la dimension complémentaire (catégorie ou dossier) avant le nom */
+.fav-tag {
+  flex: none;
+  max-width: 45%;
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .fav-loupe {
   flex: none;
   background: transparent;
@@ -575,4 +606,229 @@ kbd {
 
 .fav-action:hover {
   border-color: var(--accent);
+}
+
+.fav-action.danger {
+  border-color: #d9534f;
+  color: #f0a6a4;
+}
+
+.fav-action.danger:hover {
+  background: rgba(217, 83, 79, 0.18);
+}
+
+/* ── Sélecteur de vue de l'onglet Favoris (catégories / dossiers) ── */
+.fav-view-toggle {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 6px;
+}
+
+.fav-view-caption {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-right: 2px;
+}
+
+.fav-view-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.fav-view-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.fav-view-btn.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* ── Menu principal (☰) ─────────────────────────────── */
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  border-radius: 10px;
+}
+
+.menu {
+  position: absolute;
+  top: 46px;
+  right: 12px;
+  min-width: 220px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+
+.menu-caption {
+  padding: 6px 10px 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.menu-item:hover,
+.menu-item:focus {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.menu-item.danger {
+  color: #f0a6a4;
+}
+
+.menu-item.danger:hover,
+.menu-item.danger:focus {
+  background: rgba(217, 83, 79, 0.18);
+}
+
+/* Colonne de coche fixe : aligne tous les libellés, cochés ou non */
+.menu-check {
+  flex: none;
+  width: 12px;
+  text-align: center;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.menu-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 5px 8px;
+}
+
+/* ── Sélecteur de dossier (modale) ──────────────────── */
+.group-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.group-option {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.group-option.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ── Gestion des dossiers (modale) ──────────────────── */
+.group-manage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.group-manage-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.group-manage-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Fenêtre « À propos » ────────────────────────────── */
+.about-modal {
+  text-align: center;
+  align-items: center;
+}
+
+.about-logo {
+  font-size: 40px;
+  line-height: 1;
+}
+
+.about-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.about-version {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.about-desc {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.about-author {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.about-link {
+  background: transparent;
+  border: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent);
+  word-break: break-all;
+  cursor: pointer;
+  padding: 0;
+}
+
+.about-link:hover {
+  text-decoration: underline;
+}
+
+.about-modal .modal-actions {
+  justify-content: center;
+  width: 100%;
 }

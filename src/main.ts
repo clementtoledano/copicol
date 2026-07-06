@@ -1,26 +1,45 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  appVersion,
   checkForUpdate,
+  clearHistory,
+  copyItem,
   countFavorites,
+  createGroup,
+  deleteGroup,
   deleteItem,
+  exportFavorites,
   hideWindow,
+  importFavorites,
   listFavorites,
+  listGroups,
   listItems,
   listKinds,
   onClipboardChanged,
+  onShowAbout,
   onWindowShown,
-  pasteItem,
+  openUrl,
+  pickOpenPath,
+  pickSavePath,
   pinItem,
+  quitApp,
+  renameGroup,
+  setItemGroup,
   setItemKind,
   unpinItem,
   updateItemContent,
+  type Group,
   type Item,
   type KindCount,
 } from "./api";
 
+/** Dépôt du projet, affiché dans la fenêtre « À propos ». */
+const REPO_URL = "https://github.com/clementtoledano/copicol";
+
 const searchInput = document.getElementById("search") as HTMLInputElement;
 const listEl = document.getElementById("list") as HTMLUListElement;
 const tabsEl = document.getElementById("tabs") as HTMLDivElement;
+const menuBtn = document.getElementById("menu-btn") as HTMLButtonElement;
 
 const KIND_META: Record<string, { label: string; icon: string }> = {
   sql: { label: "SQL", icon: "🗄️" },
@@ -44,11 +63,16 @@ const ALL_KINDS = ["sql", "code", "url", "email", "json", "color", "phone", "pat
 
 let items: Item[] = [];
 let kinds: KindCount[] = [];
+let groups: Group[] = [];
 let favCount = 0;
 let selectedIndex = 0;
 let activeKind: string | null = null;
 // Onglet Favoris actif : affiche les épinglés (exclusifs des autres onglets).
 let showFavorites = false;
+// Mode de regroupement dans l'onglet Favoris : par dossier créé par
+// l'utilisateur, ou par catégorie auto-détectée.
+type FavView = "groups" | "kinds";
+let favView: FavView = "kinds";
 // Favoris dont la carte est dépliée (aperçu visible) dans l'onglet Favoris.
 const expandedFavIds = new Set<number>();
 
@@ -70,7 +94,7 @@ let modalOpen = false;
 /// Invite à saisir un nom descriptif. Le nom est OBLIGATOIRE : « Enregistrer »
 /// reste désactivé tant que le champ est vide. Résout le nom (sans espaces
 /// superflus) ou `null` si l'utilisateur renonce (Échap, Annuler, clic dehors).
-function promptName(current: string): Promise<string | null> {
+function promptName(current: string, titleText?: string): Promise<string | null> {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "modal-overlay";
@@ -79,7 +103,7 @@ function promptName(current: string): Promise<string | null> {
 
     const title = document.createElement("div");
     title.className = "modal-title";
-    title.textContent = current ? "Renommer le favori" : "Nommer le favori";
+    title.textContent = titleText ?? (current ? "Renommer le favori" : "Nommer le favori");
 
     const input = document.createElement("input");
     input.className = "modal-input";
@@ -191,6 +215,71 @@ function promptKind(current: string): Promise<string | null> {
     });
 
     box.append(title, grid, actions);
+    overlay.append(box);
+    document.body.appendChild(overlay);
+    modalOpen = true;
+  });
+}
+
+/// Choix du dossier d'un favori : liste des dossiers existants, « Sans dossier »
+/// pour l'en retirer, et « Nouveau dossier… » pour en créer un.
+/// Résout la sélection ou `null` (Échap, Annuler, clic dehors).
+type GroupChoice = { kind: "set"; id: number | null } | { kind: "new" };
+
+function promptGroup(current: number | null): Promise<GroupChoice | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const box = document.createElement("div");
+    box.className = "modal";
+
+    const title = document.createElement("div");
+    title.className = "modal-title";
+    title.textContent = "Ranger dans un dossier";
+
+    const close = (result: GroupChoice | null): void => {
+      modalOpen = false;
+      overlay.remove();
+      resolve(result);
+    };
+
+    const list = document.createElement("div");
+    list.className = "group-picker";
+
+    const option = (label: string, active: boolean, onClick: () => void): void => {
+      const btn = document.createElement("button");
+      btn.className = active ? "modal-btn group-option active" : "modal-btn group-option";
+      btn.textContent = label;
+      btn.addEventListener("click", onClick);
+      list.appendChild(btn);
+    };
+
+    option("Sans dossier", current === null, () => close({ kind: "set", id: null }));
+    for (const g of groups) {
+      option(`📁 ${g.name}`, current === g.id, () => close({ kind: "set", id: g.id }));
+    }
+    option("＋ Nouveau dossier…", false, () => close({ kind: "new" }));
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const cancel = document.createElement("button");
+    cancel.className = "modal-btn";
+    cancel.textContent = "Annuler";
+    cancel.addEventListener("click", () => close(null));
+    actions.appendChild(cancel);
+
+    overlay.addEventListener("mousedown", (e) => {
+      if (e.target === overlay) close(null);
+    });
+    overlay.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(null);
+      }
+    });
+
+    box.append(title, list, actions);
     overlay.append(box);
     document.body.appendChild(overlay);
     modalOpen = true;
@@ -316,7 +405,7 @@ function confirmAction(message: string, confirmLabel: string): Promise<boolean> 
 
 /// Ferme toute modale résiduelle (ex. la fenêtre a été cachée pendant la saisie).
 function closeModals(): void {
-  document.querySelectorAll(".modal-overlay").forEach((el) => el.remove());
+  document.querySelectorAll(".modal-overlay, .menu-overlay").forEach((el) => el.remove());
   modalOpen = false;
 }
 
@@ -357,6 +446,23 @@ async function changeFavoriteKind(item: Item): Promise<void> {
   }
 }
 
+/// Range un favori dans un dossier existant, dans un nouveau dossier, ou l'en
+/// retire. La création d'un nouveau dossier enchaîne sur la saisie de son nom.
+async function changeFavoriteGroup(item: Item): Promise<void> {
+  if (!item.pinned) return;
+  const choice = await promptGroup(item.group_id);
+  if (!choice) return;
+  if (choice.kind === "new") {
+    const name = await promptName("", "Nouveau dossier");
+    if (!name) return;
+    const id = await createGroup(name);
+    await setItemGroup(item.id, id);
+  } else {
+    await setItemGroup(item.id, choice.id);
+  }
+  await refresh();
+}
+
 /// Édite le contenu d'un favori. Un conflit avec un contenu existant (même
 /// texte déjà présent ailleurs) est rare ; en cas d'échec l'utilisateur est
 /// prévenu et peut rouvrir l'édition pour corriger.
@@ -375,15 +481,16 @@ async function editFavoriteContent(item: Item): Promise<void> {
 
 async function refresh(): Promise<void> {
   const search = searchInput.value.trim();
-  [kinds, favCount] = await Promise.all([listKinds(), countFavorites()]);
+  [kinds, favCount, groups] = await Promise.all([listKinds(), countFavorites(), listGroups()]);
   // Les onglets ont pu se vider (dernier élément retiré) : retour à Tous
   if (showFavorites && favCount === 0) showFavorites = false;
   if (activeKind !== null && !kinds.some((k) => k.kind === activeKind)) {
     activeKind = null;
   }
   if (showFavorites) {
-    // Réordonné pour un affichage groupé par catégorie (voir renderFavorites)
-    items = groupFavoritesByKind(await listFavorites(search));
+    // Réordonné pour l'affichage groupé (par dossier ou par catégorie, voir renderFavorites)
+    const favs = await listFavorites(search);
+    items = favView === "groups" ? groupFavoritesByGroup(favs) : groupFavoritesByKind(favs);
   } else {
     items = await listItems(search, activeKind);
   }
@@ -548,7 +655,7 @@ function renderList(): void {
     li.appendChild(meta);
     li.appendChild(actions);
 
-    li.addEventListener("click", () => pasteWithFlash(index));
+    li.addEventListener("click", () => copyWithFlash(index));
     li.addEventListener("mousemove", () => {
       if (selectedIndex !== index) {
         selectedIndex = index;
@@ -560,36 +667,109 @@ function renderList(): void {
   });
 }
 
-/// Réordonne les favoris (déjà triés par nom) en groupes par catégorie,
+/// Réordonne les favoris (déjà triés par nom) groupés par catégorie,
 /// les catégories les plus fournies d'abord. L'ordre du tableau plat suit
 /// l'ordre d'affichage, pour que la navigation clavier reste cohérente.
 function groupFavoritesByKind(favs: Item[]): Item[] {
-  const groups = new Map<string, Item[]>();
+  const byKind = new Map<string, Item[]>();
   for (const item of favs) {
-    const arr = groups.get(item.kind);
+    const arr = byKind.get(item.kind);
     if (arr) arr.push(item);
-    else groups.set(item.kind, [item]);
+    else byKind.set(item.kind, [item]);
   }
-  return [...groups.entries()]
+  return [...byKind.entries()]
     .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
     .flatMap(([, arr]) => arr);
 }
 
-/// Rend l'onglet Favoris : en-têtes de catégorie puis lignes compactes
-/// (nom + loupe). `items` est déjà en ordre groupé (voir groupFavoritesByKind).
+/// Réordonne les favoris (déjà triés par nom) par dossier, dans
+/// l'ordre des dossiers (par nom), les favoris sans dossier en dernier.
+function groupFavoritesByGroup(favs: Item[]): Item[] {
+  const ordered: Item[] = [];
+  for (const g of groups) {
+    ordered.push(...favs.filter((f) => f.group_id === g.id));
+  }
+  ordered.push(...favs.filter((f) => f.group_id === null));
+  return ordered;
+}
+
+/// Tag de la dimension complémentaire, affiché avant le nom du favori : dans la
+/// vue « dossiers » on montre la catégorie ; dans la vue « catégories » on montre
+/// le dossier (rien si le favori n'appartient à aucun dossier).
+function favTag(item: Item): HTMLSpanElement | null {
+  const span = document.createElement("span");
+  span.className = "fav-tag";
+  if (favView === "groups") {
+    const meta = kindMeta(item.kind);
+    span.textContent = `${meta.icon} ${meta.label}`;
+    return span;
+  }
+  if (item.group_id === null) return null;
+  const g = groups.find((x) => x.id === item.group_id);
+  if (!g) return null;
+  span.textContent = `📁 ${g.name}`;
+  return span;
+}
+
+/// Clé et libellé de la section d'un favori selon la vue active (dossier ou
+/// catégorie), pour afficher les en-têtes et savoir quand en insérer un.
+function favSection(item: Item): { key: string; label: string } {
+  if (favView === "groups") {
+    const g = item.group_id !== null ? groups.find((x) => x.id === item.group_id) : undefined;
+    return g ? { key: `g${g.id}`, label: `📁 ${g.name}` } : { key: "none", label: "Sans dossier" };
+  }
+  const meta = kindMeta(item.kind);
+  return { key: item.kind, label: `${meta.icon} ${meta.label}` };
+}
+
+/// Rend l'onglet Favoris : sélecteur de vue (dossiers/catégories), puis en-têtes
+/// de section et lignes compactes (nom + loupe). `items` est déjà en ordre
+/// groupé (voir groupFavoritesByGroup / groupFavoritesByKind).
 function renderFavorites(): void {
-  let currentKind: string | null = null;
+  renderFavViewToggle();
+  let currentKey: string | null = null;
   items.forEach((item, index) => {
-    if (item.kind !== currentKind) {
-      currentKind = item.kind;
+    const section = favSection(item);
+    if (section.key !== currentKey) {
+      currentKey = section.key;
       const header = document.createElement("li");
       header.className = "fav-header";
-      const meta = kindMeta(item.kind);
-      header.textContent = `${meta.icon} ${meta.label}`;
+      header.textContent = section.label;
       listEl.appendChild(header);
     }
     listEl.appendChild(buildFavoriteRow(item, index));
   });
+}
+
+/// Change le mode de regroupement des favoris (catégorie ou dossier) et
+/// rafraîchit l'affichage. Point d'entrée unique du menu ☰ et de la barre de
+/// bascule de l'onglet Favoris.
+function setFavView(view: FavView): void {
+  if (favView === view) return;
+  favView = view;
+  selectedIndex = 0;
+  void refresh();
+}
+
+/// Petit sélecteur en tête de l'onglet Favoris pour basculer entre un
+/// regroupement par catégorie auto-détectée et par dossier créé par l'utilisateur.
+function renderFavViewToggle(): void {
+  const bar = document.createElement("li");
+  bar.className = "fav-view-toggle";
+
+  const make = (view: FavView, label: string): HTMLButtonElement => {
+    const btn = document.createElement("button");
+    btn.className = favView === view ? "fav-view-btn active" : "fav-view-btn";
+    btn.textContent = label;
+    btn.addEventListener("click", () => setFavView(view));
+    return btn;
+  };
+
+  const caption = document.createElement("span");
+  caption.className = "fav-view-caption";
+  caption.textContent = "Grouper par";
+  bar.append(caption, make("kinds", "Catégories"), make("groups", "Dossiers"));
+  listEl.appendChild(bar);
 }
 
 /// Une ligne de favori : nom + loupe. La loupe déplie/replie la carte en place
@@ -602,6 +782,11 @@ function buildFavoriteRow(item: Item, index: number): HTMLLIElement {
 
   const head = document.createElement("div");
   head.className = "fav-head";
+
+  // Tag de la dimension complémentaire à la vue active : la catégorie quand on
+  // regroupe par dossier, le dossier quand on regroupe par catégorie.
+  const tag = favTag(item);
+  if (tag) head.appendChild(tag);
 
   const name = document.createElement("span");
   name.className = "fav-name";
@@ -632,17 +817,18 @@ function buildFavoriteRow(item: Item, index: number): HTMLLIElement {
 
     const actions = document.createElement("div");
     actions.className = "fav-detail-actions";
-    actions.appendChild(favAction("Coller", () => pasteWithFlash(index)));
+    actions.appendChild(favAction("Copier", () => copyWithFlash(index)));
     actions.appendChild(favAction("Renommer", () => void renameFavorite(item)));
     actions.appendChild(favAction("Modifier", () => void editFavoriteContent(item)));
     actions.appendChild(favAction("Catégorie", () => void changeFavoriteKind(item)));
+    actions.appendChild(favAction("Dossier", () => void changeFavoriteGroup(item)));
     actions.appendChild(favAction("Retirer", () => void togglePinFlow(item)));
     detail.appendChild(actions);
 
     li.appendChild(detail);
   }
 
-  li.addEventListener("click", () => pasteWithFlash(index));
+  li.addEventListener("click", () => copyWithFlash(index));
   li.addEventListener("mousemove", () => {
     if (selectedIndex !== index) {
       selectedIndex = index;
@@ -687,13 +873,13 @@ function fillPreview(el: HTMLElement, content: string, term: string): void {
   if (pos < content.length) el.appendChild(document.createTextNode(content.slice(pos)));
 }
 
-/// Flash de confirmation sur l'élément, puis collage.
-function pasteWithFlash(index: number): void {
+/// Flash de confirmation sur l'élément, puis copie dans le presse-papiers.
+function copyWithFlash(index: number): void {
   const item = items[index];
   if (!item) return;
   const node = listEl.querySelectorAll<HTMLLIElement>("li.item")[index];
-  node?.classList.add("pasting");
-  window.setTimeout(() => void pasteItem(item.id), 100);
+  node?.classList.add("copying");
+  window.setTimeout(() => void copyItem(item.id), 100);
 }
 
 function updateSelection(): void {
@@ -723,7 +909,7 @@ document.addEventListener("keydown", (e) => {
       break;
     case "Enter": {
       e.preventDefault();
-      pasteWithFlash(selectedIndex);
+      copyWithFlash(selectedIndex);
       break;
     }
     case "Escape":
@@ -791,9 +977,331 @@ function setupResizeHandles(): void {
   }
 }
 
+// ── Menu principal (bouton ☰) ───────────────────────────
+// Un seul menu déroulant compact, ancré au bouton de la barre de recherche.
+
+interface MenuEntry {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  /** Entrée cochable : `true`/`false` affiche une coche, `undefined` = pas de coche. */
+  checked?: boolean;
+}
+
+/// Un nœud du menu : une entrée cliquable, un intitulé de section, ou un trait.
+type MenuNode = MenuEntry | { caption: string } | "separator";
+
+/// Ouvre le menu ☰ : un panneau flottant ancré sous le bouton. Se ferme au
+/// clic dehors, sur Échap, ou après le choix d'une entrée.
+function openMainMenu(): void {
+  // Un menu déjà ouvert : on bascule (referme).
+  if (document.querySelector(".menu-overlay")) {
+    closeMainMenu();
+    return;
+  }
+
+  const nodes: MenuNode[] = [
+    { caption: "Affichage des favoris" },
+    { label: "Par catégorie", checked: favView === "kinds", onClick: () => setFavView("kinds") },
+    { label: "Par dossier", checked: favView === "groups", onClick: () => setFavView("groups") },
+    "separator",
+    { caption: "Dossiers" },
+    { label: "Nouveau dossier…", onClick: () => void createGroupFlow() },
+  ];
+  if (groups.length > 0) {
+    nodes.push({ label: "Gérer les dossiers…", onClick: () => void manageGroups() });
+  }
+  nodes.push(
+    "separator",
+    { caption: "Sauvegarde des favoris" },
+    { label: "Exporter les favoris…", onClick: () => void exportFavoritesFlow() },
+    { label: "Importer des favoris…", onClick: () => void importFavoritesFlow() },
+    "separator",
+    { caption: "Historique" },
+    { label: "Vider l'historique…", onClick: () => void clearHistoryFlow(), danger: true },
+    "separator",
+    { caption: "copicol" },
+    { label: "Vérifier les mises à jour", onClick: () => void checkUpdatesManually() },
+    { label: "À propos", onClick: () => void showAbout() },
+    { label: "Quitter", onClick: () => void quitApp(), danger: true },
+  );
+
+  const overlay = document.createElement("div");
+  overlay.className = "menu-overlay";
+  overlay.addEventListener("mousedown", (e) => {
+    if (e.target === overlay) closeMainMenu();
+  });
+  overlay.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeMainMenu();
+    }
+  });
+
+  const menu = document.createElement("div");
+  menu.className = "menu";
+  for (const node of nodes) {
+    if (node === "separator") {
+      const sep = document.createElement("div");
+      sep.className = "menu-separator";
+      menu.appendChild(sep);
+    } else if ("caption" in node) {
+      const cap = document.createElement("div");
+      cap.className = "menu-caption";
+      cap.textContent = node.caption;
+      menu.appendChild(cap);
+    } else {
+      const btn = document.createElement("button");
+      btn.className = node.danger ? "menu-item danger" : "menu-item";
+      // Colonne de coche fixe : garde tous les libellés alignés, cochés ou non.
+      const check = document.createElement("span");
+      check.className = "menu-check";
+      check.textContent = node.checked ? "✓" : "";
+      const label = document.createElement("span");
+      label.textContent = node.label;
+      btn.append(check, label);
+      btn.addEventListener("click", () => {
+        closeMainMenu();
+        node.onClick();
+      });
+      menu.appendChild(btn);
+    }
+  }
+
+  overlay.appendChild(menu);
+  document.body.appendChild(overlay);
+  modalOpen = true;
+  menu.querySelector<HTMLButtonElement>(".menu-item")?.focus();
+}
+
+function closeMainMenu(): void {
+  document.querySelector(".menu-overlay")?.remove();
+  modalOpen = false;
+}
+
+/// Crée un dossier depuis le menu (sans l'affecter à un favori en particulier).
+async function createGroupFlow(): Promise<void> {
+  const name = await promptName("", "Nouveau dossier");
+  if (!name) return;
+  await createGroup(name);
+  await refresh();
+}
+
+/// Gère les dossiers existants : renommer ou supprimer. La suppression conserve
+/// les favoris (ils repassent « sans dossier »).
+async function manageGroups(): Promise<void> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const box = document.createElement("div");
+    box.className = "modal";
+
+    const title = document.createElement("div");
+    title.className = "modal-title";
+    title.textContent = "Gérer les dossiers";
+
+    const listWrap = document.createElement("div");
+    listWrap.className = "group-manage";
+    for (const g of groups) {
+      const row = document.createElement("div");
+      row.className = "group-manage-row";
+      const name = document.createElement("span");
+      name.className = "group-manage-name";
+      name.textContent = `📁 ${g.name}`;
+      const rename = document.createElement("button");
+      rename.className = "fav-action";
+      rename.textContent = "Renommer";
+      rename.addEventListener("click", async () => {
+        const next = await promptName(g.name, "Renommer le dossier");
+        if (next) {
+          await renameGroup(g.id, next);
+          close();
+          await refresh();
+          void manageGroups();
+        }
+      });
+      const del = document.createElement("button");
+      del.className = "fav-action danger";
+      del.textContent = "Supprimer";
+      del.addEventListener("click", async () => {
+        if (await confirmAction(`Supprimer le dossier « ${g.name} » ?`, "Supprimer")) {
+          await deleteGroup(g.id);
+          close();
+          await refresh();
+        }
+      });
+      row.append(name, rename, del);
+      listWrap.appendChild(row);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const done = document.createElement("button");
+    done.className = "modal-btn primary";
+    done.textContent = "Fermer";
+    done.addEventListener("click", () => close());
+    actions.appendChild(done);
+
+    const close = (): void => {
+      modalOpen = false;
+      overlay.remove();
+      resolve();
+    };
+    overlay.addEventListener("mousedown", (e) => {
+      if (e.target === overlay) close();
+    });
+    overlay.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close();
+      }
+    });
+
+    box.append(title, listWrap, actions);
+    overlay.append(box);
+    document.body.appendChild(overlay);
+    modalOpen = true;
+  });
+}
+
+/// Exporte tous les favoris (et leurs dossiers) vers un fichier JSON choisi.
+async function exportFavoritesFlow(): Promise<void> {
+  if (favCount === 0) {
+    alert("Aucun favori à exporter.");
+    return;
+  }
+  const date = new Date().toISOString().slice(0, 10);
+  const path = await pickSavePath(`copicol-favoris-${date}.json`);
+  if (!path) return;
+  try {
+    const count = await exportFavorites(path);
+    alert(`${count} favori(s) exporté(s).`);
+  } catch (err) {
+    console.error(err);
+    alert("Export impossible : " + String(err));
+  }
+}
+
+/// Importe des favoris depuis un fichier JSON et fusionne (doublons ignorés).
+async function importFavoritesFlow(): Promise<void> {
+  const path = await pickOpenPath();
+  if (!path) return;
+  try {
+    const { imported, skipped } = await importFavorites(path);
+    await refresh();
+    const parts = [`${imported} favori(s) importé(s)`];
+    if (skipped > 0) parts.push(`${skipped} ignoré(s) (déjà présents)`);
+    alert(parts.join(", ") + ".");
+  } catch (err) {
+    console.error(err);
+    alert("Import impossible : " + String(err));
+  }
+}
+
+/// Vide l'historique après confirmation (les favoris sont conservés).
+async function clearHistoryFlow(): Promise<void> {
+  if (await confirmAction("Vider tout l'historique ? Les favoris sont conservés.", "Vider")) {
+    await clearHistory();
+    selectedIndex = 0;
+    await refresh();
+  }
+}
+
+/// Vérification de mise à jour déclenchée manuellement : informe l'utilisateur
+/// du résultat, y compris quand l'application est déjà à jour.
+async function checkUpdatesManually(): Promise<void> {
+  await checkForUpdate(
+    (version) =>
+      confirmAction(`Mise à jour ${version} disponible. L'installer et redémarrer ?`, "Mettre à jour"),
+    (upToDate) => {
+      alert(
+        upToDate
+          ? "copicol est à jour."
+          : "Impossible de vérifier les mises à jour (hors ligne ?).",
+      );
+    },
+  );
+}
+
+/// Fenêtre « À propos » : nom, version, auteur et lien du dépôt.
+async function showAbout(): Promise<void> {
+  const version = await appVersion().catch(() => "");
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const box = document.createElement("div");
+  box.className = "modal about-modal";
+
+  const logo = document.createElement("div");
+  logo.className = "about-logo";
+  logo.textContent = "📋";
+
+  const name = document.createElement("div");
+  name.className = "about-name";
+  name.textContent = "copicol";
+
+  const ver = document.createElement("div");
+  ver.className = "about-version";
+  ver.textContent = version ? `Version ${version}` : "";
+
+  const desc = document.createElement("div");
+  desc.className = "about-desc";
+  desc.textContent = "Un gestionnaire de presse-papiers simple et rapide.";
+
+  const author = document.createElement("div");
+  author.className = "about-author";
+  author.textContent = "© Clément Toledano";
+
+  const link = document.createElement("button");
+  link.className = "about-link";
+  link.type = "button";
+  link.textContent = REPO_URL;
+  link.title = "Ouvrir le dépôt dans le navigateur";
+  link.addEventListener("click", () => void openUrl(REPO_URL));
+
+  const actions = document.createElement("div");
+  actions.className = "modal-actions";
+  const done = document.createElement("button");
+  done.className = "modal-btn primary";
+  done.textContent = "Fermer";
+
+  const close = (): void => {
+    modalOpen = false;
+    overlay.remove();
+  };
+  done.addEventListener("click", close);
+  overlay.addEventListener("mousedown", (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape" || e.key === "Enter") {
+      e.preventDefault();
+      close();
+    }
+  });
+  actions.appendChild(done);
+
+  box.append(logo, name, ver, desc, author, link, actions);
+  overlay.append(box);
+  document.body.appendChild(overlay);
+  modalOpen = true;
+  done.focus();
+}
+
 async function init(): Promise<void> {
   setupResizeHandles();
   await refresh();
+
+  menuBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openMainMenu();
+  });
+  await onShowAbout(() => {
+    closeMainMenu();
+    void showAbout();
+  });
 
   await onClipboardChanged(() => void refresh());
   await onWindowShown(() => {

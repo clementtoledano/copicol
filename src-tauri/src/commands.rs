@@ -1,6 +1,6 @@
 use std::sync::mpsc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::watcher::WatcherMsg;
 use crate::{db, AppState};
@@ -94,12 +94,118 @@ pub fn hide_window(app: AppHandle) {
     }
 }
 
-/// Colle un élément : écrit son contenu dans le presse-papiers, cache la
-/// fenêtre pour rendre le focus à l'application précédente, puis simule
-/// Ctrl+V (Cmd+V sur macOS). Si la simulation échoue, le contenu reste
-/// dans le presse-papiers et l'utilisateur peut coller manuellement.
+// ── Dossiers de favoris ─────────────────────────────────────────────
+
+/// Liste les dossiers de favoris, classés par nom.
 #[tauri::command]
-pub async fn paste_item(app: AppHandle, id: i64) -> Result<(), String> {
+pub fn list_groups(state: State<AppState>) -> Result<Vec<db::Group>, String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::list_groups(&conn).map_err(|e| e.to_string())
+}
+
+/// Crée un dossier (ou renvoie l'existant si le nom est déjà pris) et retourne
+/// son identifiant.
+#[tauri::command]
+pub fn create_group(state: State<AppState>, name: String) -> Result<i64, String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::create_group(&conn, name.trim()).map_err(|e| e.to_string())
+}
+
+/// Renomme un dossier existant.
+#[tauri::command]
+pub fn rename_group(state: State<AppState>, id: i64, name: String) -> Result<(), String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::rename_group(&conn, id, name.trim()).map_err(|e| e.to_string())
+}
+
+/// Supprime un dossier ; ses favoris sont conservés mais repassent « sans dossier ».
+#[tauri::command]
+pub fn delete_group(app: AppHandle, id: i64) -> Result<(), String> {
+    {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db::delete_group(&conn, id).map_err(|e| e.to_string())?;
+    }
+    crate::refresh_tray_menu(&app);
+    Ok(())
+}
+
+/// Affecte un favori à un dossier (ou l'en retire si `group_id` est `null`).
+#[tauri::command]
+pub fn set_item_group(app: AppHandle, id: i64, group_id: Option<i64>) -> Result<(), String> {
+    {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db::set_item_group(&conn, id, group_id).map_err(|e| e.to_string())?;
+    }
+    crate::refresh_tray_menu(&app);
+    Ok(())
+}
+
+/// Vide l'historique (les favoris épinglés sont conservés).
+#[tauri::command]
+pub fn clear_history(app: AppHandle) -> Result<(), String> {
+    {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db::clear_history(&conn).map_err(|e| e.to_string())?;
+    }
+    let _ = app.emit("clipboard-changed", ());
+    Ok(())
+}
+
+/// Quitte complètement l'application (depuis la barre de menu).
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+// ── Import / export des favoris ─────────────────────────────────────
+
+/// Résumé d'un import, remonté à l'interface.
+#[derive(serde::Serialize)]
+pub struct ImportSummary {
+    pub imported: usize,
+    pub skipped: usize,
+}
+
+/// Écrit tous les favoris (et leurs dossiers) au format JSON dans `path`.
+/// Renvoie le nombre de favoris exportés.
+#[tauri::command]
+pub fn export_favorites(app: AppHandle, path: String) -> Result<usize, String> {
+    let data = {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db::export_favorites(&conn).map_err(|e| e.to_string())?
+    };
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(data.favorites.len())
+}
+
+/// Lit un fichier JSON de favoris et le fusionne (doublons ignorés). Renvoie le
+/// nombre d'éléments importés et ignorés.
+#[tauri::command]
+pub fn import_favorites(app: AppHandle, path: String) -> Result<ImportSummary, String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let file: db::FavoritesFile = serde_json::from_str(&text)
+        .map_err(|_| "Fichier invalide : un export JSON de copicol est attendu.".to_string())?;
+
+    let (imported, skipped) = {
+        let state = app.state::<AppState>();
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db::import_favorites(&conn, &file, crate::watcher::now_unix()).map_err(|e| e.to_string())?
+    };
+    crate::refresh_tray_menu(&app);
+    let _ = app.emit("clipboard-changed", ());
+    Ok(ImportSummary { imported, skipped })
+}
+
+/// Copie un élément : écrit son contenu dans le presse-papiers et cache la
+/// fenêtre. Le collage reste à la charge de l'utilisateur (Ctrl+V dans
+/// l'application de son choix) : copicol ne simule aucune frappe.
+#[tauri::command]
+pub fn copy_item(app: AppHandle, id: i64) -> Result<(), String> {
     let state = app.state::<AppState>();
 
     let content = {
@@ -133,45 +239,5 @@ pub async fn paste_item(app: AppHandle, id: i64) -> Result<(), String> {
         let _ = db::mark_used(&conn, id);
     }
 
-    // Attente du transfert de focus + simulation du collage : déplacées sur un
-    // thread bloquant dédié pour ne pas geler le runtime async (et donc les
-    // autres commandes) pendant les ~150 ms de sleep.
-    let window = app.get_webview_window("main");
-    tauri::async_runtime::spawn_blocking(move || {
-        // Attend que le focus ait réellement quitté copicol avant de simuler
-        // Ctrl+V : sinon le collage frappe notre propre webview et déclenche
-        // le dialogue de permission presse-papiers de WebView2 sous Windows.
-        if let Some(w) = window {
-            for _ in 0..40 {
-                if !w.is_focused().unwrap_or(false) {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
-        }
-        // Petite marge pour que l'application cible soit prête à recevoir la frappe
-        std::thread::sleep(Duration::from_millis(100));
-        simulate_paste();
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-
     Ok(())
-}
-
-fn simulate_paste() {
-    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-
-    let Ok(mut enigo) = Enigo::new(&Settings::default()) else {
-        return; // fallback : le contenu est déjà dans le presse-papiers
-    };
-
-    #[cfg(target_os = "macos")]
-    let modifier = Key::Meta;
-    #[cfg(not(target_os = "macos"))]
-    let modifier = Key::Control;
-
-    let _ = enigo.key(modifier, Direction::Press);
-    let _ = enigo.key(Key::Unicode('v'), Direction::Click);
-    let _ = enigo.key(modifier, Direction::Release);
 }

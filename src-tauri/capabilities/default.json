@@ -8,6 +8,9 @@
     "core:window:allow-hide",
     "core:window:allow-start-resize-dragging",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "opener:allow-open-url",
+    "dialog:allow-open",
+    "dialog:allow-save"
   ]
 }
