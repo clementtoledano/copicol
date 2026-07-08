@@ -822,10 +822,11 @@ kbd {
   word-break: break-all;
   cursor: pointer;
   padding: 0;
+  text-decoration: underline;
 }
 
 .about-link:hover {
-  text-decoration: underline;
+  opacity: 0.8;
 }
 
 .about-modal .modal-actions {

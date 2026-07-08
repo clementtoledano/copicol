@@ -19,7 +19,7 @@ import {
   onClipboardChanged,
   onShowAbout,
   onWindowShown,
-  openUrl,
+  openRepoUrl,
   pickOpenPath,
   pickSavePath,
   pinItem,
@@ -74,7 +74,7 @@ let showFavorites = false;
 // Mode de regroupement dans l'onglet Favoris : par dossier créé par
 // l'utilisateur, ou par catégorie auto-détectée.
 type FavView = "groups" | "kinds";
-let favView: FavView = "kinds";
+let favView: FavView = "groups";
 // Favoris dont la carte est dépliée (aperçu visible) dans l'onglet Favoris.
 const expandedFavIds = new Set<number>();
 // Préférence de démarrage automatique avec Windows ; activée par défaut,
@@ -787,7 +787,7 @@ function renderFavViewToggle(): void {
   const caption = document.createElement("span");
   caption.className = "fav-view-caption";
   caption.textContent = "Grouper par";
-  bar.append(caption, make("kinds", "Catégories"), make("groups", "Dossiers"));
+  bar.append(caption, make("groups", "Dossiers"), make("kinds", "Catégories"));
   listEl.appendChild(bar);
 }
 
@@ -1021,8 +1021,8 @@ function openMainMenu(): void {
 
   const nodes: MenuNode[] = [
     { caption: "Affichage des favoris" },
-    { label: "Par catégorie", checked: favView === "kinds", onClick: () => setFavView("kinds") },
     { label: "Par dossier", checked: favView === "groups", onClick: () => setFavView("groups") },
+    { label: "Par catégorie", checked: favView === "kinds", onClick: () => setFavView("kinds") },
     "separator",
     { caption: "Dossiers" },
     { label: "Nouveau dossier…", onClick: () => void createGroupFlow() },
@@ -1049,7 +1049,7 @@ function openMainMenu(): void {
     { caption: "copicol" },
     { label: "Vérifier les mises à jour", onClick: () => void checkUpdatesManually() },
     { label: "À propos", onClick: () => void showAbout() },
-    { label: "Quitter", onClick: () => void quitApp(), danger: true },
+    { label: "Quitter", onClick: () => void quitFlow(), danger: true },
   );
 
   const overlay = document.createElement("div");
@@ -1237,6 +1237,13 @@ async function clearHistoryFlow(): Promise<void> {
   }
 }
 
+/// Quitte l'application après confirmation (évite un clic accidentel).
+async function quitFlow(): Promise<void> {
+  if (await confirmAction("Quitter copicol ?", "Quitter")) {
+    await quitApp();
+  }
+}
+
 /// Vérification de mise à jour déclenchée manuellement : informe l'utilisateur
 /// du résultat, y compris quand l'application est déjà à jour.
 async function checkUpdatesManually(): Promise<void> {
@@ -1281,12 +1288,25 @@ async function showAbout(): Promise<void> {
   author.className = "about-author";
   author.textContent = "© Clément Toledano";
 
-  const link = document.createElement("button");
+  const link = document.createElement("a");
   link.className = "about-link";
-  link.type = "button";
+  link.href = REPO_URL;
   link.textContent = REPO_URL;
   link.title = "Ouvrir le dépôt dans le navigateur";
-  link.addEventListener("click", () => void openUrl(REPO_URL));
+  link.addEventListener("click", (e) => {
+    e.preventDefault();
+    void (async () => {
+      try {
+        await openRepoUrl();
+        // La fenêtre reste toujours au premier plan (alwaysOnTop) : on la
+        // cache pour que le navigateur nouvellement ouvert soit visible.
+        await hideWindow();
+      } catch (err) {
+        console.error(err);
+        alert("Impossible d'ouvrir le navigateur : " + String(err));
+      }
+    })();
+  });
 
   const actions = document.createElement("div");
   actions.className = "modal-actions";

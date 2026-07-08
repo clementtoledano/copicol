@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use tauri::menu::{Menu, MenuBuilder, MenuItem, SubmenuBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use watcher::WatcherMsg;
 
@@ -199,6 +200,22 @@ fn copy_favorite_to_clipboard(app: &AppHandle, id: i64) {
     let _ = db::mark_used(&conn, id);
 }
 
+/// Demande confirmation avant de quitter (boîte de dialogue native, non
+/// bloquante) — évite de fermer copicol par un clic accidentel sur « Quitter ».
+fn confirm_quit(app: &AppHandle) {
+    let handle = app.clone();
+    app.dialog()
+        .message("Voulez-vous vraiment quitter copicol ?")
+        .title("Quitter copicol")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("Quitter".into(), "Annuler".into()))
+        .show(move |confirmed| {
+            if confirmed {
+                handle.exit(0);
+            }
+        });
+}
+
 /// Icône de la zone de notification : l'app vit dans le tray.
 fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let menu = tray_menu(app.handle())?;
@@ -217,7 +234,7 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 show_window(app);
                 let _ = app.emit("show-about", ());
             }
-            "quit" => app.exit(0),
+            "quit" => confirm_quit(app),
             other => {
                 if let Some(fid) = other.strip_prefix("fav:").and_then(|s| s.parse::<i64>().ok()) {
                     copy_favorite_to_clipboard(app, fid);
@@ -339,6 +356,7 @@ pub fn run() {
             commands::set_item_group,
             commands::clear_history,
             commands::quit_app,
+            commands::open_repo_url,
             commands::export_favorites,
             commands::import_favorites,
             commands::get_autostart_enabled,

@@ -137,10 +137,9 @@ export function onShowAbout(cb: () => void): Promise<UnlistenFn> {
   return listen("show-about", cb);
 }
 
-/** Ouvre une URL dans le navigateur par défaut. */
-export async function openUrl(url: string): Promise<void> {
-  const { openUrl } = await import("@tauri-apps/plugin-opener");
-  await openUrl(url);
+/** Ouvre le dépôt GitHub dans le navigateur par défaut (commande système côté Rust). */
+export function openRepoUrl(): Promise<void> {
+  return invoke("open_repo_url");
 }
 
 // ── Import / export des favoris ─────────────────────────────────────

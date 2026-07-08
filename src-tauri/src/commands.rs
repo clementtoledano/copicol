@@ -160,6 +160,35 @@ pub fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
+/// Ouvre le dépôt GitHub dans le navigateur par défaut, en passant directement
+/// par la commande système plutôt que par le plugin `opener` (qui échoue
+/// silencieusement sur certaines configurations Windows).
+#[tauri::command]
+pub fn open_repo_url() -> Result<(), String> {
+    const URL: &str = "https://github.com/clementtoledano/copicol";
+
+    #[cfg(target_os = "windows")]
+    {
+        // Appelle directement le gestionnaire de protocole du shell (celui
+        // qu'utilise l'Explorateur pour un lien) plutôt que `cmd /C start`,
+        // qui s'est révélé silencieusement inopérant sur ce poste.
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", URL])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(URL).spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open").arg(URL).spawn().map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
 // ── Démarrage automatique ────────────────────────────────────────────
 
 /// Préférence actuelle (activée par défaut), pour cocher l'entrée du menu.
