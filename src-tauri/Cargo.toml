@@ -1,6 +1,6 @@
 [package]
 name = "copicol"
-version = "0.3.1"
+version = "0.3.2"
 description = "Un gestionnaire de presse-papiers simple et rapide"
 authors = ["Clément Toledano"]
 edition = "2021"
@@ -30,6 +30,7 @@ sha2 = "0.10"
 regex = "1"
 tauri-plugin-log = "2"
 log = "0.4"
+tauri-plugin-notification = "2"
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "5"

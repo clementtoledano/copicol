@@ -1,21 +1,24 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   appVersion,
-  checkForUpdate,
+  checkUpdate,
   clearHistory,
   copyItem,
   countFavorites,
   createGroup,
   deleteGroup,
   deleteItem,
+  ensureNotificationPermission,
   exportFavorites,
   getAutostartEnabled,
   hideWindow,
   importFavorites,
+  installPendingUpdate,
   listFavorites,
   listGroups,
   listItems,
   listKinds,
+  notifyUpdateAvailable,
   onClipboardChanged,
   onShowAbout,
   onWindowShown,
@@ -80,6 +83,10 @@ const expandedFavIds = new Set<number>();
 // Préférence de démarrage automatique avec Windows ; activée par défaut,
 // rechargée au démarrage (voir init) et à chaque ouverture du menu ☰.
 let autostartEnabled = true;
+// Mise à jour détectée au démarrage (fenêtre encore cachée à ce moment) :
+// signalée par notification système, puis proposée à la prochaine ouverture
+// de la fenêtre (voir onWindowShown).
+let pendingStartupUpdate: { version: string; notes: string } | null = null;
 
 const MONO_KINDS = new Set(["sql", "code", "json"]);
 
@@ -1247,17 +1254,14 @@ async function quitFlow(): Promise<void> {
 /// Vérification de mise à jour déclenchée manuellement : informe l'utilisateur
 /// du résultat, y compris quand l'application est déjà à jour.
 async function checkUpdatesManually(): Promise<void> {
-  await checkForUpdate(
-    (version) =>
-      confirmAction(`Mise à jour ${version} disponible. L'installer et redémarrer ?`, "Mettre à jour"),
-    (upToDate) => {
-      alert(
-        upToDate
-          ? "copicol est à jour."
-          : "Impossible de vérifier les mises à jour (hors ligne ?).",
-      );
-    },
-  );
+  const result = await checkUpdate();
+  if (!result.available) {
+    alert(result.offline ? "Impossible de vérifier les mises à jour (hors ligne ?)." : "copicol est à jour.");
+    return;
+  }
+  if (await confirmAction(`Mise à jour ${result.version} disponible. L'installer et redémarrer ?`, "Mettre à jour")) {
+    await installPendingUpdate();
+  }
 }
 
 /// Fenêtre « À propos » : nom, version, auteur et lien du dépôt.
@@ -1360,15 +1364,38 @@ async function init(): Promise<void> {
     selectedIndex = 0;
     searchInput.focus();
     void refresh();
+    void promptPendingUpdate();
   });
 
   searchInput.focus();
 
-  // Vérification silencieuse au démarrage : une seule fois, ne bloque rien
-  // si hors ligne ou si aucune mise à jour n'est disponible.
-  void checkForUpdate((version) =>
-    confirmAction(`Mise à jour ${version} disponible. L'installer et redémarrer ?`, "Mettre à jour"),
-  );
+  // Vérification silencieuse au démarrage : la fenêtre est encore cachée à ce
+  // stade (comportement lanceur), donc une modale ici resterait invisible.
+  // On signale plutôt via notification système, et l'installation sera
+  // proposée à la prochaine ouverture de la fenêtre (voir onWindowShown).
+  void checkUpdateAtStartup();
+}
+
+/// Vérifie une mise à jour au démarrage et la signale par notification système
+/// (visible même fenêtre cachée/en tray) si elle n'a pas déjà pu être annoncée.
+async function checkUpdateAtStartup(): Promise<void> {
+  const result = await checkUpdate();
+  if (!result.available) return;
+  pendingStartupUpdate = { version: result.version, notes: result.notes };
+  if (await ensureNotificationPermission().catch(() => false)) {
+    await notifyUpdateAvailable(result.version).catch((err) => console.error(err));
+  }
+}
+
+/// Propose l'installation d'une mise à jour détectée au démarrage, la première
+/// fois que la fenêtre est rouverte après coup.
+async function promptPendingUpdate(): Promise<void> {
+  if (!pendingStartupUpdate) return;
+  const update = pendingStartupUpdate;
+  pendingStartupUpdate = null;
+  if (await confirmAction(`Mise à jour ${update.version} disponible. L'installer et redémarrer ?`, "Mettre à jour")) {
+    await installPendingUpdate();
+  }
 }
 
 void init();

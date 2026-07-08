@@ -185,34 +185,53 @@ export function onWindowShown(cb: () => void): Promise<UnlistenFn> {
   return listen("window-shown", cb);
 }
 
-/// Cherche une mise à jour, la télécharge et l'installe si l'utilisateur
-/// confirme, puis redémarre l'application. Ne fait rien si aucune mise à jour
-/// n'est disponible ou si la vérification échoue (ex. hors ligne).
-export async function checkForUpdate(
-  confirmInstall: (version: string, notes: string) => Promise<boolean>,
-  /** Appelé lors d'une vérification manuelle : `true` = aucune mise à jour,
-   *  `false` = la vérification a échoué (hors ligne…). Absent au démarrage,
-   *  où l'absence de mise à jour reste silencieuse. */
-  onNoUpdate?: (upToDate: boolean) => void,
-): Promise<void> {
+export type UpdateCheckResult =
+  | { available: true; version: string; notes: string }
+  | { available: false; offline: boolean };
+
+/** La mise à jour trouvée par le dernier `checkUpdate`, prête à installer. */
+let pendingUpdate: Awaited<ReturnType<typeof import("@tauri-apps/plugin-updater")["check"]>> | null =
+  null;
+
+/// Cherche une mise à jour sans rien installer. Le résultat distingue « aucune
+/// mise à jour » de « vérification impossible » (ex. hors ligne), pour que
+/// l'appelant puisse adapter son message. La mise à jour trouvée est mémorisée
+/// pour un appel ultérieur à `installPendingUpdate`.
+export async function checkUpdate(): Promise<UpdateCheckResult> {
   const { check } = await import("@tauri-apps/plugin-updater");
-  const { relaunch } = await import("@tauri-apps/plugin-process");
-
-  let update;
   try {
-    update = await check();
+    pendingUpdate = await check();
   } catch {
-    onNoUpdate?.(false); // pas de connexion, ou releases GitHub indisponibles
-    return;
+    pendingUpdate = null;
+    return { available: false, offline: true };
   }
-  if (!update) {
-    onNoUpdate?.(true);
-    return;
-  }
+  if (!pendingUpdate) return { available: false, offline: false };
+  return { available: true, version: pendingUpdate.version, notes: pendingUpdate.body ?? "" };
+}
 
-  const proceed = await confirmInstall(update.version, update.body ?? "");
-  if (!proceed) return;
-
-  await update.downloadAndInstall();
+/// Télécharge et installe la mise à jour trouvée par `checkUpdate`, puis
+/// redémarre l'application. Ne fait rien si aucune mise à jour n'est en attente.
+export async function installPendingUpdate(): Promise<void> {
+  if (!pendingUpdate) return;
+  const { relaunch } = await import("@tauri-apps/plugin-process");
+  await pendingUpdate.downloadAndInstall();
   await relaunch();
+}
+
+/// Demande la permission d'afficher des notifications système si elle n'a pas
+/// déjà été accordée (ou refusée) lors d'un appel précédent.
+export async function ensureNotificationPermission(): Promise<boolean> {
+  const { isPermissionGranted, requestPermission } = await import("@tauri-apps/plugin-notification");
+  if (await isPermissionGranted()) return true;
+  return (await requestPermission()) === "granted";
+}
+
+/// Notifie via une notification système (visible même fenêtre cachée/en tray)
+/// qu'une mise à jour est disponible.
+export async function notifyUpdateAvailable(version: string): Promise<void> {
+  const { sendNotification } = await import("@tauri-apps/plugin-notification");
+  sendNotification({
+    title: "Mise à jour copicol disponible",
+    body: `Version ${version} — ouvrez copicol pour l'installer.`,
+  });
 }

@@ -275,6 +275,8 @@ pub fn run() {
         // Mises à jour automatiques (GitHub Releases, cf. .github/workflows/release.yml)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Notification système : signale une mise à jour dispo même fenêtre cachée
+        .plugin(tauri_plugin_notification::init())
         // Ouverture de liens externes (dépôt GitHub depuis « À propos »)
         .plugin(tauri_plugin_opener::init())
         // Boîtes de dialogue fichier (import/export des favoris)
