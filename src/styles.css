@@ -300,7 +300,9 @@ mark {
 }
 
 .modal.modal-wide {
-  max-width: 420px;
+  max-width: none;
+  width: 100%;
+  height: 100%;
 }
 
 .modal-textarea {
@@ -317,8 +319,92 @@ mark {
   max-height: 320px;
 }
 
+.modal-wide .modal-textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+}
+
 .modal-textarea:focus {
   border-color: var(--accent);
+}
+
+.modal-textarea.wrap-off {
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* ── Barre d'outils d'édition de texte ───────────── */
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.editor-toolbar .sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 0 2px;
+}
+
+.editor-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+
+.editor-btn:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.editor-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.editor-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.find-replace-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.find-replace-bar input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  min-width: 140px;
+  flex: 1 1 140px;
+}
+
+.find-replace-bar input:focus {
+  border-color: var(--accent);
+}
+
+.find-replace-bar .find-status {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }
 
 .kind-picker {

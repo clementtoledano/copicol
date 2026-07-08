@@ -298,8 +298,15 @@ function promptGroup(current: number | null): Promise<GroupChoice | null> {
   });
 }
 
-/// Édite le contenu d'un favori dans une zone de texte pré-remplie. Résout le
-/// nouveau contenu ou `null` si inchangé/vide/annulé.
+/// Échappe les caractères spéciaux d'une chaîne pour l'utiliser dans un RegExp.
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/// Édite le contenu d'un favori dans une zone de texte pré-remplie, avec une
+/// barre d'outils d'édition (undo/redo, presse-papiers, casse, indentation,
+/// rechercher/remplacer). Résout le nouveau contenu ou `null` si
+/// inchangé/vide/annulé.
 function promptContent(current: string): Promise<string | null> {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
@@ -315,6 +322,195 @@ function promptContent(current: string): Promise<string | null> {
     textarea.className = "modal-textarea";
     textarea.value = current;
     textarea.spellcheck = false;
+
+    // ── Barre d'outils d'édition ──
+    const toolbar = document.createElement("div");
+    toolbar.className = "editor-toolbar";
+
+    const makeSep = (): HTMLDivElement => {
+      const sep = document.createElement("div");
+      sep.className = "sep";
+      return sep;
+    };
+    const makeBtn = (label: string, hint: string, onClick: () => void): HTMLButtonElement => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "editor-btn";
+      btn.textContent = label;
+      btn.title = hint;
+      // Empêche le bouton de voler le focus/la sélection du textarea.
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        onClick();
+      });
+      return btn;
+    };
+
+    const focusArea = (): void => textarea.focus();
+
+    const transformCase = (fn: (s: string) => string): void => {
+      focusArea();
+      const noSelection = textarea.selectionStart === textarea.selectionEnd;
+      const start = noSelection ? 0 : textarea.selectionStart;
+      const end = noSelection ? textarea.value.length : textarea.selectionEnd;
+      textarea.setSelectionRange(start, end);
+      const transformed = fn(textarea.value.slice(start, end));
+      document.execCommand("insertText", false, transformed);
+      textarea.setSelectionRange(start, start + transformed.length);
+    };
+
+    const lineBlockBounds = (start: number, end: number): { lineStart: number; lineEnd: number } => {
+      const value = textarea.value;
+      const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+      let lineEnd = value.indexOf("\n", end);
+      if (lineEnd === -1) lineEnd = value.length;
+      return { lineStart, lineEnd };
+    };
+    const indentSelection = (remove: boolean): void => {
+      focusArea();
+      const { lineStart, lineEnd } = lineBlockBounds(textarea.selectionStart, textarea.selectionEnd);
+      const newBlock = textarea.value
+        .slice(lineStart, lineEnd)
+        .split("\n")
+        .map((line) => (remove ? line.replace(/^ {1,2}/, "") : "  " + line))
+        .join("\n");
+      textarea.setSelectionRange(lineStart, lineEnd);
+      document.execCommand("insertText", false, newBlock);
+      textarea.setSelectionRange(lineStart, lineStart + newBlock.length);
+    };
+
+    const pasteFromClipboard = async (): Promise<void> => {
+      try {
+        const text = await navigator.clipboard.readText();
+        focusArea();
+        document.execCommand("insertText", false, text);
+      } catch {
+        // Presse-papiers inaccessible : on ignore silencieusement.
+      }
+    };
+
+    toolbar.append(
+      makeBtn("↶ Annuler", "Annuler (Ctrl+Z)", () => {
+        focusArea();
+        document.execCommand("undo");
+      }),
+      makeBtn("↷ Refaire", "Refaire (Ctrl+Y)", () => {
+        focusArea();
+        document.execCommand("redo");
+      }),
+      makeSep(),
+      makeBtn("✂️ Couper", "Couper la sélection", () => {
+        focusArea();
+        document.execCommand("cut");
+      }),
+      makeBtn("📋 Copier", "Copier la sélection", () => {
+        focusArea();
+        document.execCommand("copy");
+      }),
+      makeBtn("📥 Coller", "Coller depuis le presse-papiers", () => void pasteFromClipboard()),
+      makeSep(),
+      makeBtn("⬚ Tout sélectionner", "Tout sélectionner (Ctrl+A)", () => {
+        focusArea();
+        textarea.select();
+      }),
+      makeSep(),
+      makeBtn("🔠 MAJ", "Mettre en majuscules", () => transformCase((s) => s.toUpperCase())),
+      makeBtn("🔡 min", "Mettre en minuscules", () => transformCase((s) => s.toLowerCase())),
+      makeSep(),
+      makeBtn("⇥ Indenter", "Indenter (Tab)", () => indentSelection(false)),
+      makeBtn("⇤ Désindenter", "Désindenter (Maj+Tab)", () => indentSelection(true)),
+      makeSep(),
+    );
+
+    // ── Barre rechercher/remplacer (repliable) ──
+    const findBar = document.createElement("div");
+    findBar.className = "find-replace-bar";
+    findBar.style.display = "none";
+    const findInput = document.createElement("input");
+    findInput.type = "text";
+    findInput.placeholder = "Rechercher…";
+    const replaceInput = document.createElement("input");
+    replaceInput.type = "text";
+    replaceInput.placeholder = "Remplacer par…";
+    const findStatus = document.createElement("span");
+    findStatus.className = "find-status";
+
+    const findNext = (): void => {
+      const term = findInput.value;
+      if (!term) return;
+      const re = new RegExp(escapeRegExp(term), "gi");
+      const value = textarea.value;
+      const matches: number[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(value)) !== null) matches.push(m.index);
+      if (matches.length === 0) {
+        findStatus.textContent = "Aucune correspondance";
+        return;
+      }
+      const from = textarea.selectionEnd;
+      const next = matches.find((i) => i >= from) ?? matches[0];
+      focusArea();
+      textarea.setSelectionRange(next, next + term.length);
+      findStatus.textContent = `${matches.indexOf(next) + 1} / ${matches.length}`;
+    };
+    const replaceOne = (): void => {
+      const term = findInput.value;
+      if (!term) return;
+      const selected = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
+      if (selected.length > 0 && selected.toLowerCase() === term.toLowerCase()) {
+        focusArea();
+        document.execCommand("insertText", false, replaceInput.value);
+      }
+      findNext();
+    };
+    const replaceAll = (): void => {
+      const term = findInput.value;
+      if (!term) return;
+      const re = new RegExp(escapeRegExp(term), "gi");
+      const value = textarea.value;
+      const count = (value.match(re) || []).length;
+      if (count === 0) {
+        findStatus.textContent = "Aucune correspondance";
+        return;
+      }
+      focusArea();
+      textarea.setSelectionRange(0, value.length);
+      document.execCommand("insertText", false, value.replace(re, replaceInput.value));
+      findStatus.textContent = `${count} remplacement${count > 1 ? "s" : ""}`;
+    };
+
+    const findNextBtn = makeBtn("Suivant", "Chercher la prochaine occurrence", findNext);
+    const replaceOneBtn = makeBtn("Remplacer", "Remplacer l'occurrence sélectionnée", replaceOne);
+    const replaceAllBtn = makeBtn("Tout remplacer", "Remplacer toutes les occurrences", replaceAll);
+    findInput.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        toggleFindBar(false);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        findNext();
+      }
+    });
+    replaceInput.addEventListener("keydown", (e) => e.stopPropagation());
+    findBar.append(findInput, replaceInput, findNextBtn, replaceOneBtn, replaceAllBtn, findStatus);
+
+    const toggleFindBar = (show?: boolean): void => {
+      const visible = show ?? findBar.style.display === "none";
+      findBar.style.display = visible ? "flex" : "none";
+      if (visible) findInput.focus();
+      else focusArea();
+    };
+    const findToggleBtn = makeBtn("🔍 Rechercher / Remplacer", "Afficher/masquer la recherche (Ctrl+F)", () =>
+      toggleFindBar(),
+    );
+    const wrapToggleBtn = makeBtn("↩️ Retour à la ligne", "Activer/désactiver le retour à la ligne", () => {
+      const wrapped = textarea.classList.toggle("wrap-off");
+      wrapToggleBtn.classList.toggle("active", wrapped);
+      focusArea();
+    });
+    toolbar.append(findToggleBtn, makeSep(), wrapToggleBtn);
 
     const actions = document.createElement("div");
     actions.className = "modal-actions";
@@ -343,6 +539,12 @@ function promptContent(current: string): Promise<string | null> {
       } else if (e.key === "Enter" && e.ctrlKey) {
         e.preventDefault();
         trySave();
+      } else if (e.key === "f" && e.ctrlKey) {
+        e.preventDefault();
+        toggleFindBar(true);
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        indentSelection(e.shiftKey);
       }
     });
     cancel.addEventListener("click", () => close(null));
@@ -352,7 +554,7 @@ function promptContent(current: string): Promise<string | null> {
     });
 
     actions.append(cancel, save);
-    box.append(title, textarea, actions);
+    box.append(title, toolbar, findBar, textarea, actions);
     overlay.append(box);
     document.body.appendChild(overlay);
 
