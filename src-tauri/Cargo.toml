@@ -1,6 +1,6 @@
 [package]
 name = "copicol"
-version = "0.3.3"
+version = "0.3.4"
 description = "Un gestionnaire de presse-papiers simple et rapide"
 authors = ["Clément Toledano"]
 edition = "2021"
@@ -34,6 +34,9 @@ tauri-plugin-notification = "2"
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "5"
+# Correction de l'entrée de démarrage automatique (chemin entre guillemets),
+# cf. quote_autostart_registry_value dans lib.rs
+winreg = "0.55"
 
 [profile.release]
 strip = true

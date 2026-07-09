@@ -673,7 +673,7 @@ dependencies = [
 
 [[package]]
 name = "copicol"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "arboard",
  "clipboard-win",
@@ -695,6 +695,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "winreg 0.55.0",
 ]
 
 [[package]]

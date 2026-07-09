@@ -148,6 +148,39 @@ pub(crate) fn refresh_tray_menu(app: &AppHandle) {
     });
 }
 
+/// Contourne un défaut de tauri-plugin-autostart sous Windows : il écrit le
+/// chemin de l'exe sans guillemets dans la clé Run, ce qui empêche le
+/// lancement au démarrage dès que le chemin contient une espace
+/// (ex. C:\Users\Prénom Nom\...). On réécrit la valeur entre guillemets.
+#[cfg(windows)]
+fn quote_autostart_registry_value(app_name: &str) {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
+    use winreg::RegKey;
+    let Ok(exe) = std::env::current_exe() else { return };
+    let quoted = format!("\"{}\"", exe.display());
+    let run = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", KEY_SET_VALUE);
+    match run.and_then(|run| run.set_value(app_name, &quoted)) {
+        Ok(()) => {}
+        Err(e) => log::warn!("copicol: impossible de corriger l'entrée de démarrage: {e}"),
+    }
+}
+
+/// Applique l'état de démarrage automatique au système (clé Run / login
+/// items). Idempotent : peut être rappelé même si l'état est déjà le bon.
+pub(crate) fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let autolaunch = app.autolaunch();
+    if enabled {
+        autolaunch.enable().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        quote_autostart_registry_value(&app.package_info().name);
+    } else {
+        autolaunch.disable().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Aligne l'état système (registre / login items) sur la préférence stockée en
 /// base (activée par défaut). Appelé au démarrage et après un import de
 /// favoris (qui peut avoir changé la préférence). Non fatal : un environnement
@@ -159,11 +192,15 @@ pub(crate) fn sync_autostart(app: &AppHandle) {
         let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db::autostart_enabled(&conn).unwrap_or(true)
     };
-    let autolaunch = app.autolaunch();
-    let already = autolaunch.is_enabled().unwrap_or(!enabled);
-    if already != enabled {
-        let result = if enabled { autolaunch.enable() } else { autolaunch.disable() };
-        if let Err(e) = result {
+    let already = app.autolaunch().is_enabled().unwrap_or(!enabled);
+    // En release : quand la préférence est active, réappliquer systématiquement
+    // (écriture idempotente) — répare au passage une entrée sans guillemets
+    // laissée par une version précédente. En dev, ne toucher l'entrée que si
+    // l'état diffère, pour ne pas faire pointer le démarrage de la session
+    // vers le build de développement.
+    let should_apply = if cfg!(debug_assertions) { already != enabled } else { enabled || already };
+    if should_apply {
+        if let Err(e) = apply_autostart(app, enabled) {
             log::warn!("copicol: démarrage automatique indisponible: {e}");
         }
     }

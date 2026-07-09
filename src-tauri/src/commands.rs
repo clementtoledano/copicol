@@ -208,10 +208,7 @@ pub fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String
         let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
         db::set_autostart_enabled(&conn, enabled).map_err(|e| e.to_string())?;
     }
-    use tauri_plugin_autostart::ManagerExt;
-    let autolaunch = app.autolaunch();
-    let result = if enabled { autolaunch.enable() } else { autolaunch.disable() };
-    result.map_err(|e| e.to_string())
+    crate::apply_autostart(&app, enabled)
 }
 
 // ── Import / export des favoris ─────────────────────────────────────
