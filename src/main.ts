@@ -103,6 +103,43 @@ function relativeTime(unixSeconds: number): string {
 // suspendue (voir le garde en tête du gestionnaire keydown global).
 let modalOpen = false;
 
+/// Identifiant unique pour relier un titre de modale à `aria-labelledby`.
+let nextModalTitleId = 0;
+
+/// Piège le focus (Tab / Maj+Tab) à l'intérieur d'une modale, pour éviter de
+/// tabuler vers des éléments cachés derrière l'overlay.
+function trapFocus(container: HTMLElement): void {
+  container.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+    const focusable = container.querySelectorAll<HTMLElement>(
+      "input, textarea, button:not(:disabled), [tabindex]:not([tabindex='-1'])",
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
+}
+
+/// Ajoute sous un champ un compteur « n/max » mis à jour à chaque saisie.
+function attachCharCounter(input: HTMLInputElement, max: number): HTMLDivElement {
+  const counter = document.createElement("div");
+  counter.className = "char-counter";
+  const sync = (): void => {
+    counter.textContent = `${input.value.length}/${max}`;
+    counter.classList.toggle("limit", input.value.length >= max);
+  };
+  input.addEventListener("input", sync);
+  sync();
+  return counter;
+}
+
 /// Invite à saisir un nom descriptif. Le nom est OBLIGATOIRE : « Enregistrer »
 /// reste désactivé tant que le champ est vide. Résout le nom (sans espaces
 /// superflus) ou `null` si l'utilisateur renonce (Échap, Annuler, clic dehors).
@@ -112,10 +149,15 @@ function promptName(current: string, titleText?: string): Promise<string | null>
     overlay.className = "modal-overlay";
     const box = document.createElement("div");
     box.className = "modal";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
 
+    const titleId = `modal-title-${nextModalTitleId++}`;
     const title = document.createElement("div");
     title.className = "modal-title";
+    title.id = titleId;
     title.textContent = titleText ?? (current ? "Renommer le favori" : "Nommer le favori");
+    box.setAttribute("aria-labelledby", titleId);
 
     const input = document.createElement("input");
     input.className = "modal-input";
@@ -125,6 +167,7 @@ function promptName(current: string, titleText?: string): Promise<string | null>
     input.autocomplete = "off";
     input.spellcheck = false;
     input.maxLength = 80;
+    const counter = attachCharCounter(input, 80);
 
     const actions = document.createElement("div");
     actions.className = "modal-actions";
@@ -146,14 +189,16 @@ function promptName(current: string, titleText?: string): Promise<string | null>
     };
 
     input.addEventListener("input", sync);
-    input.addEventListener("keydown", (e) => {
+    // Écouteur sur l'overlay (et non sur le seul champ) : Échap et Entrée
+    // fonctionnent même si le focus a été déplacé vers un bouton (Tab).
+    overlay.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      if (e.key === "Enter") {
-        e.preventDefault();
-        if (value()) close(value());
-      } else if (e.key === "Escape") {
+      if (e.key === "Escape") {
         e.preventDefault();
         close(null);
+      } else if (e.key === "Enter" && document.activeElement === input) {
+        e.preventDefault();
+        if (value()) close(value());
       }
     });
     cancel.addEventListener("click", () => close(null));
@@ -164,8 +209,10 @@ function promptName(current: string, titleText?: string): Promise<string | null>
       if (e.target === overlay) close(null);
     });
 
+    trapFocus(box);
+
     actions.append(cancel, save);
-    box.append(title, input, actions);
+    box.append(title, input, counter, actions);
     overlay.append(box);
     document.body.appendChild(overlay);
 
@@ -295,6 +342,161 @@ function promptGroup(current: number | null): Promise<GroupChoice | null> {
     overlay.append(box);
     document.body.appendChild(overlay);
     modalOpen = true;
+  });
+}
+
+/// Nomme un nouveau favori et choisit (ou crée) son dossier dans une seule
+/// modale, pour éviter l'aller-retour ultérieur par « Dossier » dans les
+/// actions. Résout `{ name, groupId }` ou `null` si annulé.
+function promptFavoriteCreate(): Promise<{ name: string; groupId: number | null } | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const box = document.createElement("div");
+    box.className = "modal";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+
+    const titleId = `modal-title-${nextModalTitleId++}`;
+    const title = document.createElement("div");
+    title.className = "modal-title";
+    title.id = titleId;
+    title.textContent = "Nommer le favori";
+    box.setAttribute("aria-labelledby", titleId);
+
+    const input = document.createElement("input");
+    input.className = "modal-input";
+    input.type = "text";
+    input.placeholder = "Nom descriptif…";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.maxLength = 80;
+    const nameCounter = attachCharCounter(input, 80);
+
+    const groupLabel = document.createElement("div");
+    groupLabel.className = "modal-subtitle";
+    groupLabel.textContent = "Dossier";
+
+    const list = document.createElement("div");
+    list.className = "group-picker";
+
+    const newGroupInput = document.createElement("input");
+    newGroupInput.className = "modal-input";
+    newGroupInput.type = "text";
+    newGroupInput.placeholder = "Nom du nouveau dossier…";
+    newGroupInput.autocomplete = "off";
+    newGroupInput.spellcheck = false;
+    newGroupInput.maxLength = 80;
+    newGroupInput.hidden = true;
+    const newGroupCounter = attachCharCounter(newGroupInput, 80);
+    newGroupCounter.hidden = true;
+
+    let selectedGroupId: number | null = null;
+    let creatingNew = false;
+
+    const option = (label: string, active: boolean, onClick: () => void): void => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = active ? "modal-btn group-option active" : "modal-btn group-option";
+      btn.textContent = label;
+      btn.addEventListener("click", onClick);
+      list.appendChild(btn);
+    };
+    const renderOptions = (): void => {
+      list.innerHTML = "";
+      option("Sans dossier", !creatingNew && selectedGroupId === null, () => {
+        creatingNew = false;
+        selectedGroupId = null;
+        newGroupInput.hidden = true;
+        newGroupCounter.hidden = true;
+        renderOptions();
+        sync();
+      });
+      for (const g of groups) {
+        option(`📁 ${g.name}`, !creatingNew && selectedGroupId === g.id, () => {
+          creatingNew = false;
+          selectedGroupId = g.id;
+          newGroupInput.hidden = true;
+          newGroupCounter.hidden = true;
+          renderOptions();
+          sync();
+        });
+      }
+      option("＋ Nouveau dossier…", creatingNew, () => {
+        creatingNew = true;
+        newGroupInput.hidden = false;
+        newGroupCounter.hidden = false;
+        renderOptions();
+        newGroupInput.focus();
+        sync();
+      });
+    };
+    renderOptions();
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const cancel = document.createElement("button");
+    cancel.className = "modal-btn";
+    cancel.textContent = "Annuler";
+    const save = document.createElement("button");
+    save.className = "modal-btn primary";
+    save.textContent = "Enregistrer";
+
+    const nameValue = (): string => input.value.trim();
+    const newGroupValue = (): string => newGroupInput.value.trim();
+    const sync = (): void => {
+      save.disabled = nameValue().length === 0 || (creatingNew && newGroupValue().length === 0);
+    };
+    const close = (result: { name: string; groupId: number | null } | null): void => {
+      modalOpen = false;
+      overlay.remove();
+      resolve(result);
+    };
+    const submit = async (): Promise<void> => {
+      if (save.disabled) return;
+      const name = nameValue();
+      if (!name) return;
+      if (creatingNew) {
+        const newName = newGroupValue();
+        if (!newName) return;
+        const id = await createGroup(newName);
+        close({ name, groupId: id });
+      } else {
+        close({ name, groupId: selectedGroupId });
+      }
+    };
+
+    input.addEventListener("input", sync);
+    newGroupInput.addEventListener("input", sync);
+    overlay.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(null);
+      } else if (
+        e.key === "Enter" &&
+        (document.activeElement === input || document.activeElement === newGroupInput)
+      ) {
+        e.preventDefault();
+        void submit();
+      }
+    });
+    cancel.addEventListener("click", () => close(null));
+    save.addEventListener("click", () => void submit());
+    overlay.addEventListener("mousedown", (e) => {
+      if (e.target === overlay) close(null);
+    });
+
+    trapFocus(box);
+
+    actions.append(cancel, save);
+    box.append(title, input, nameCounter, groupLabel, list, newGroupInput, newGroupCounter, actions);
+    overlay.append(box);
+    document.body.appendChild(overlay);
+
+    modalOpen = true;
+    sync();
+    input.focus();
   });
 }
 
@@ -632,9 +834,12 @@ async function togglePinFlow(item: Item): Promise<void> {
       await refresh();
     }
   } else {
-    const name = await promptName("");
-    if (name) {
-      await pinItem(item.id, name);
+    const result = await promptFavoriteCreate();
+    if (result) {
+      await pinItem(item.id, result.name);
+      if (result.groupId !== null) {
+        await setItemGroup(item.id, result.groupId);
+      }
       await refresh();
     }
   }

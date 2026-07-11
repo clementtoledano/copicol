@@ -444,6 +444,24 @@ mark {
   border-color: var(--accent);
 }
 
+.modal-subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin-top: -4px;
+}
+
+.char-counter {
+  align-self: flex-end;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: -8px;
+}
+
+.char-counter.limit {
+  color: #d9534f;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
