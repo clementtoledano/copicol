@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vite",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 1420
+    },
+    {
+      "name": "vite-4174",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "4174"],
+      "port": 4174
+    }
+  ]
+}

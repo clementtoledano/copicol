@@ -752,6 +752,56 @@ mark {
   font-size: 12px;
 }
 
+/* ── Notes de version (CHANGELOG.md) ─────────────────── */
+.notes-modal {
+  max-width: 360px;
+}
+
+.notes-body {
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.notes-h2 {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-top: 10px;
+}
+
+.notes-h2:first-child {
+  margin-top: 0;
+}
+
+.notes-h3 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+
+.notes-list {
+  list-style: disc;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.notes-p {
+  color: var(--text);
+}
+
 /* ── Aide clavier ───────────────────────────────────── */
 #hints {
   display: flex;

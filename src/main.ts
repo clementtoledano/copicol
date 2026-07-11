@@ -11,6 +11,7 @@ import {
   ensureNotificationPermission,
   exportFavorites,
   getAutostartEnabled,
+  getChangelog,
   getUiPref,
   hideWindow,
   importFavorites,
@@ -525,6 +526,158 @@ function promptFavoriteCreate(): Promise<{ name: string; groupId: number | null 
     sync();
     input.focus();
   });
+}
+
+/// Rendu minimal d'un extrait Markdown (titres `##`/`###`, listes `- `,
+/// paragraphes) : suffisant pour CHANGELOG.md, sans dépendance externe.
+function renderNotes(container: HTMLElement, markdown: string): void {
+  container.innerHTML = "";
+  let list: HTMLUListElement | null = null;
+  for (const rawLine of markdown.split("\n")) {
+    const line = rawLine.trim();
+    if (line.startsWith("## ")) {
+      list = null;
+      const h = document.createElement("div");
+      h.className = "notes-h2";
+      h.textContent = line.slice(3).trim();
+      container.appendChild(h);
+    } else if (line.startsWith("### ")) {
+      list = null;
+      const h = document.createElement("div");
+      h.className = "notes-h3";
+      h.textContent = line.slice(4).trim();
+      container.appendChild(h);
+    } else if (line.startsWith("- ")) {
+      if (!list) {
+        list = document.createElement("ul");
+        list.className = "notes-list";
+        container.appendChild(list);
+      }
+      const li = document.createElement("li");
+      li.textContent = line.slice(2).trim();
+      list.appendChild(li);
+    } else if (line.length > 0) {
+      list = null;
+      const p = document.createElement("div");
+      p.className = "notes-p";
+      p.textContent = line;
+      container.appendChild(p);
+    }
+    // Lignes vides : ignorées, l'espacement vient des marges CSS des titres.
+  }
+}
+
+/// Confirmation enrichie avant d'installer une mise à jour : affiche les
+/// notes de version (issues du CHANGELOG, publiées avec la release) plutôt
+/// que le seul numéro de version. Résout `true` si l'utilisateur installe.
+function promptUpdateAvailable(version: string, notes: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const box = document.createElement("div");
+    box.className = "modal notes-modal";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+
+    const titleId = `modal-title-${nextModalTitleId++}`;
+    const title = document.createElement("div");
+    title.className = "modal-title";
+    title.id = titleId;
+    title.textContent = `Mise à jour ${version} disponible`;
+    box.setAttribute("aria-labelledby", titleId);
+
+    const body = document.createElement("div");
+    body.className = "notes-body";
+    if (notes.trim()) {
+      renderNotes(body, notes);
+    } else {
+      body.textContent = "Aucune note de version disponible.";
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const cancel = document.createElement("button");
+    cancel.className = "modal-btn";
+    cancel.textContent = "Plus tard";
+    const confirm = document.createElement("button");
+    confirm.className = "modal-btn primary";
+    confirm.textContent = "Mettre à jour";
+
+    const close = (result: boolean): void => {
+      modalOpen = false;
+      overlay.remove();
+      resolve(result);
+    };
+    cancel.addEventListener("click", () => close(false));
+    confirm.addEventListener("click", () => close(true));
+    overlay.addEventListener("mousedown", (e) => {
+      if (e.target === overlay) close(false);
+    });
+    overlay.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(false);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        close(true);
+      }
+    });
+
+    actions.append(cancel, confirm);
+    box.append(title, body, actions);
+    overlay.append(box);
+    document.body.appendChild(overlay);
+    modalOpen = true;
+    confirm.focus();
+  });
+}
+
+/// Affiche le contenu de CHANGELOG.md (menu ☰ → « Notes de version »),
+/// consultable indépendamment d'une mise à jour en cours.
+async function showChangelog(): Promise<void> {
+  const markdown = await getChangelog().catch(() => "");
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  const box = document.createElement("div");
+  box.className = "modal notes-modal";
+
+  const title = document.createElement("div");
+  title.className = "modal-title";
+  title.textContent = "Notes de version";
+
+  const body = document.createElement("div");
+  body.className = "notes-body";
+  renderNotes(body, markdown);
+
+  const actions = document.createElement("div");
+  actions.className = "modal-actions";
+  const done = document.createElement("button");
+  done.className = "modal-btn primary";
+  done.textContent = "Fermer";
+
+  const close = (): void => {
+    modalOpen = false;
+    overlay.remove();
+  };
+  done.addEventListener("click", close);
+  overlay.addEventListener("mousedown", (e) => {
+    if (e.target === overlay) close();
+  });
+  overlay.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+    }
+  });
+  actions.appendChild(done);
+
+  box.append(title, body, actions);
+  overlay.append(box);
+  document.body.appendChild(overlay);
+  modalOpen = true;
+  done.focus();
 }
 
 /// Échappe les caractères spéciaux d'une chaîne pour l'utiliser dans un RegExp.
@@ -1579,6 +1732,7 @@ function openMainMenu(): void {
     },
     "separator",
     { caption: "copicol" },
+    { label: "Notes de version", onClick: () => void showChangelog() },
     { label: "Vérifier les mises à jour", onClick: () => void checkUpdatesManually() },
     { label: "À propos", onClick: () => void showAbout() },
     { label: "Quitter", onClick: () => void quitFlow(), danger: true },
@@ -1785,7 +1939,7 @@ async function checkUpdatesManually(): Promise<void> {
     alert(result.offline ? "Impossible de vérifier les mises à jour (hors ligne ?)." : "copicol est à jour.");
     return;
   }
-  if (await confirmAction(`Mise à jour ${result.version} disponible. L'installer et redémarrer ?`, "Mettre à jour")) {
+  if (await promptUpdateAvailable(result.version, result.notes)) {
     await installPendingUpdate();
   }
 }
@@ -1947,7 +2101,7 @@ async function promptPendingUpdate(): Promise<void> {
   if (!pendingStartupUpdate) return;
   const update = pendingStartupUpdate;
   pendingStartupUpdate = null;
-  if (await confirmAction(`Mise à jour ${update.version} disponible. L'installer et redémarrer ?`, "Mettre à jour")) {
+  if (await promptUpdateAvailable(update.version, update.notes)) {
     await installPendingUpdate();
   }
 }

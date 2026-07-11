@@ -211,6 +211,18 @@ pub fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String
     crate::apply_autostart(&app, enabled)
 }
 
+// ── Notes de version ──────────────────────────────────────────────────
+
+/// Contenu de `CHANGELOG.md`, embarqué dans le binaire à la compilation (pas
+/// de ressource à empaqueter séparément). Affiché depuis le menu ☰ et dans la
+/// confirmation de mise à jour.
+const CHANGELOG: &str = include_str!("../../CHANGELOG.md");
+
+#[tauri::command]
+pub fn get_changelog() -> &'static str {
+    CHANGELOG
+}
+
 // ── Préférences d'interface ──────────────────────────────────────────
 
 /// Lit une préférence d'interface (thème, densité…). `None` si jamais définie.

@@ -137,6 +137,11 @@ export function setUiPref(key: string, value: string): Promise<void> {
   return invoke("set_ui_pref", { key, value });
 }
 
+/** Contenu de CHANGELOG.md, embarqué dans l'application. */
+export function getChangelog(): Promise<string> {
+  return invoke("get_changelog");
+}
+
 /** Version de l'application (depuis tauri.conf.json). */
 export function appVersion(): Promise<string> {
   return getVersion();

@@ -402,6 +402,7 @@ pub fn run() {
             commands::set_autostart_enabled,
             commands::get_ui_pref,
             commands::set_ui_pref,
+            commands::get_changelog,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de copicol");
