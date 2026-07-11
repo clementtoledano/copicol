@@ -400,6 +400,8 @@ pub fn run() {
             commands::import_favorites,
             commands::get_autostart_enabled,
             commands::set_autostart_enabled,
+            commands::get_ui_pref,
+            commands::set_ui_pref,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de copicol");

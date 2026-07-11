@@ -191,6 +191,17 @@ fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()
     Ok(())
 }
 
+/// Préférence d'interface (thème, densité…) : clé libre préfixée `ui_` en
+/// base pour rester à l'écart des clés système comme `autostart_enabled`.
+pub fn ui_pref(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    get_setting(conn, &format!("ui_{key}"))
+}
+
+/// Mémorise une préférence d'interface (voir `ui_pref`).
+pub fn set_ui_pref(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    set_setting(conn, &format!("ui_{key}"), value)
+}
+
 /// Toutes les préférences, pour l'export (clé/valeur brut de la table `settings`).
 fn list_settings(conn: &Connection) -> rusqlite::Result<HashMap<String, String>> {
     let mut stmt = conn.prepare("SELECT key, value FROM settings")?;

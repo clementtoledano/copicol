@@ -127,6 +127,16 @@ export function setAutostartEnabled(enabled: boolean): Promise<void> {
   return invoke("set_autostart_enabled", { enabled });
 }
 
+/** Préférence d'interface (thème, densité…). `null` si jamais définie. */
+export function getUiPref(key: string): Promise<string | null> {
+  return invoke("get_ui_pref", { key });
+}
+
+/** Mémorise une préférence d'interface. */
+export function setUiPref(key: string, value: string): Promise<void> {
+  return invoke("set_ui_pref", { key, value });
+}
+
 /** Version de l'application (depuis tauri.conf.json). */
 export function appVersion(): Promise<string> {
   return getVersion();

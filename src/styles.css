@@ -9,10 +9,34 @@
   --bg-elevated: #1e2128;
   --bg-hover: #262a33;
   --border: #2e333e;
+  --window-border: #3d4454;
   --text: #e6e8ee;
   --text-dim: #8a90a0;
   --accent: #5865f2;
   --accent-soft: rgba(88, 101, 242, 0.18);
+  --danger: #d9534f;
+  --danger-text: #f0a6a4;
+  --danger-soft: rgba(217, 83, 79, 0.15);
+  --star: #f5c451;
+}
+
+/* ── Thème clair ─────────────────────────────────────────
+   Activé via l'entrée « Thème clair » du menu ⚙ (persisté en base,
+   attribut data-theme posé sur <html> au démarrage). */
+:root[data-theme="light"] {
+  --bg: #f4f5f8;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e8eaf0;
+  --border: #d8dbe4;
+  --window-border: #b9bec9;
+  --text: #23262e;
+  --text-dim: #6b7280;
+  --accent: #4f5bd5;
+  --accent-soft: rgba(79, 91, 213, 0.12);
+  --danger: #c9302c;
+  --danger-text: #b3261e;
+  --danger-soft: rgba(201, 48, 44, 0.1);
+  --star: #d99e00;
 }
 
 html,
@@ -27,15 +51,97 @@ body {
   background: var(--bg);
   color: var(--text);
   /* Bordure visible : c'est elle qu'on attrape pour redimensionner */
-  border: 1px solid #3d4454;
+  border: 1px solid var(--window-border);
   border-radius: 10px;
   user-select: none;
 }
 
 #app {
   display: flex;
-  flex-direction: column;
   height: 100vh;
+  /* Suit l'arrondi du body pour que la colonne d'activité soit rognée aux coins */
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+/* Apparition de la fenêtre (Ctrl+Shift+V) : fondu + léger zoom, assez court
+   pour ne pas retarder la frappe dans la recherche */
+@keyframes app-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+#app.app-in {
+  animation: app-in 0.12s ease-out;
+}
+
+/* ── Barre d'activité (colonne façon VS Code) ───────── */
+#activitybar {
+  flex: none;
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+}
+
+.act-btn {
+  position: relative;
+  background: transparent;
+  border: none;
+  /* Liseré gauche : marqueur de la vue active, transparent sinon */
+  border-left: 2px solid transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  padding: 11px 0;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.12s, background 0.12s;
+}
+
+.act-btn:hover {
+  opacity: 1;
+}
+
+.act-btn svg {
+  display: block;
+  margin: 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+.act-btn.active {
+  opacity: 1;
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.act-spacer {
+  flex: 1;
+}
+
+/* Compteur de favoris, superposé au coin de l'icône ⭐ */
+.act-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 8px;
+}
+
+#content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   padding: 10px;
   gap: 8px;
 }
@@ -52,8 +158,29 @@ body {
 }
 
 #search-icon {
+  display: flex;
+  align-items: center;
   opacity: 0.6;
-  font-size: 13px;
+}
+
+#search-clear {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#search-clear:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+#search-clear[hidden] {
+  display: none;
 }
 
 #search {
@@ -70,23 +197,6 @@ body {
   color: var(--text-dim);
 }
 
-/* Bouton du menu principal (☰) dans la barre de recherche */
-#menu-btn {
-  flex: none;
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 6px 2px 6px 8px;
-  transition: color 0.12s;
-}
-
-#menu-btn:hover {
-  color: var(--text);
-}
-
 /* ── Onglets automatiques par type ──────────────────── */
 #tabs {
   display: flex;
@@ -94,7 +204,15 @@ body {
   flex-wrap: wrap;
 }
 
+/* Masqués dans les vues Favoris/Dossiers (display:flex l'emporte sur [hidden]) */
+#tabs[hidden] {
+  display: none;
+}
+
 .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -103,6 +221,11 @@ body {
   font-size: 12px;
   cursor: pointer;
   transition: all 0.12s;
+}
+
+/* L'icône du chip reprend la couleur de sa catégorie (voir .kind-*) */
+.chip svg {
+  color: var(--kind-color, currentColor);
 }
 
 .chip:hover {
@@ -174,6 +297,16 @@ body {
   font-size: 12px;
 }
 
+/* Aperçu tronqué à 3 lignes dans l'historique : toutes les cartes gardent
+   ~la même hauteur, la liste se scanne d'un coup d'œil. Le contenu complet
+   reste accessible via la modale d'édition. */
+.preview.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
 /* Occurrences du terme recherché */
 mark {
   background: var(--accent-soft);
@@ -199,14 +332,86 @@ mark {
 }
 
 .pin-badge {
+  display: inline-flex;
   background: transparent;
   padding: 0;
+  color: var(--star);
+}
+
+.pin-badge svg {
+  fill: currentColor;
 }
 
 .kind-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+/* ── Couleur par catégorie ──────────────────────────────
+   Une teinte par type détecté (detect.rs) : rend le classement automatique
+   visible d'un coup d'œil dans les badges, tags et chips. */
+.kind-sql {
+  --kind-color: #ffb454;
+}
+.kind-code {
+  --kind-color: #c792ea;
+}
+.kind-url {
+  --kind-color: #6cb2ff;
+}
+.kind-email {
+  --kind-color: #4dd0c4;
+}
+.kind-json {
+  --kind-color: #8ed081;
+}
+.kind-color {
+  --kind-color: #f78fb3;
+}
+.kind-phone {
+  --kind-color: #5bd6a2;
+}
+.kind-path {
+  --kind-color: #d8b26e;
+}
+.kind-text {
+  --kind-color: #9aa3b5;
+}
+
+.badge.kind-badge,
+.fav-tag.kind-badge {
+  color: var(--kind-color, var(--text));
+  background: color-mix(in srgb, var(--kind-color, var(--accent)) 14%, transparent);
+}
+
+/* Teintes assombries pour rester lisibles sur fond clair */
+:root[data-theme="light"] .kind-sql {
+  --kind-color: #b45309;
+}
+:root[data-theme="light"] .kind-code {
+  --kind-color: #7c3aed;
+}
+:root[data-theme="light"] .kind-url {
+  --kind-color: #1d63d8;
+}
+:root[data-theme="light"] .kind-email {
+  --kind-color: #0f766e;
+}
+:root[data-theme="light"] .kind-json {
+  --kind-color: #3d8b3d;
+}
+:root[data-theme="light"] .kind-color {
+  --kind-color: #d6336c;
+}
+:root[data-theme="light"] .kind-phone {
+  --kind-color: #0e8a5f;
+}
+:root[data-theme="light"] .kind-path {
+  --kind-color: #8a6a2f;
+}
+:root[data-theme="light"] .kind-text {
+  --kind-color: #5b6472;
 }
 
 /* Pastille de la couleur réelle pour les éléments de type couleur */
@@ -218,39 +423,40 @@ mark {
   border: 1px solid var(--border);
 }
 
-/* ── Actions au survol ──────────────────────────────── */
+/* ── Actions au survol ──────────────────────────────────
+   Dans le flux, en bout de ligne meta (et non superposées au texte) :
+   l'espace est réservé en permanence pour éviter tout saut de hauteur,
+   seule l'opacité change au survol. */
 .actions {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  display: none;
+  margin-left: auto;
+  display: flex;
   align-items: center;
   gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
 }
 
 .item:hover .actions,
 .item.selected .actions {
-  display: flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 
-.actions button,
-.actions select {
+.actions button {
+  display: inline-flex;
+  align-items: center;
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 6px;
-  padding: 2px 6px;
+  padding: 3px 6px;
   font-size: 12px;
   cursor: pointer;
 }
 
 .actions button:hover {
   border-color: var(--accent);
-}
-
-.actions select {
-  max-width: 90px;
-  font-size: 11px;
 }
 
 /* ── Titre d'un favori nommé ─────────────────────────── */
@@ -262,6 +468,17 @@ mark {
   font-weight: 600;
   color: var(--text);
   cursor: pointer;
+}
+
+/* Étoile pleine et dorée devant le nom d'un favori */
+.star-ico {
+  display: inline-flex;
+  flex: none;
+  color: var(--star);
+}
+
+.star-ico svg {
+  fill: currentColor;
 }
 
 .item-title-text {
@@ -459,7 +676,7 @@ mark {
 }
 
 .char-counter.limit {
-  color: #d9534f;
+  color: var(--danger);
 }
 
 .modal-actions {
@@ -500,20 +717,39 @@ mark {
 }
 
 .modal-btn.danger {
-  background: rgba(217, 83, 79, 0.15);
-  border-color: #d9534f;
-  color: #f0a6a4;
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger-text);
 }
 
 .modal-btn.danger:hover {
-  background: rgba(217, 83, 79, 0.28);
+  background: color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
+/* État vide illustré : icône de la vue + phrase d'action */
 .empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   text-align: center;
   color: var(--text-dim);
-  padding: 40px 0;
+  padding: 48px 16px;
   font-size: 13px;
+}
+
+.empty svg {
+  opacity: 0.35;
+  margin-bottom: 6px;
+}
+
+.empty-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.empty-sub {
+  font-size: 12px;
 }
 
 /* ── Aide clavier ───────────────────────────────────── */
@@ -656,13 +892,25 @@ kbd {
   text-overflow: ellipsis;
 }
 
+/* Icônes posées dans un contexte de texte (tags, en-têtes, options de modale) */
+.fav-tag svg,
+.fav-header svg,
+.group-option svg,
+.group-manage-name svg,
+.kind-option svg {
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
 .fav-loupe {
   flex: none;
+  display: inline-flex;
+  align-items: center;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-dim);
   border-radius: 6px;
-  padding: 2px 7px;
+  padding: 3px 7px;
   font-size: 12px;
   cursor: pointer;
 }
@@ -713,54 +961,15 @@ kbd {
 }
 
 .fav-action.danger {
-  border-color: #d9534f;
-  color: #f0a6a4;
+  border-color: var(--danger);
+  color: var(--danger-text);
 }
 
 .fav-action.danger:hover {
-  background: rgba(217, 83, 79, 0.18);
+  background: var(--danger-soft);
 }
 
-/* ── Sélecteur de vue de l'onglet Favoris (catégories / dossiers) ── */
-.fav-view-toggle {
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 2px 6px;
-}
-
-.fav-view-caption {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-dim);
-  margin-right: 2px;
-}
-
-.fav-view-btn {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  border-radius: 999px;
-  padding: 3px 12px;
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.12s;
-}
-
-.fav-view-btn:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-
-.fav-view-btn.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-/* ── Menu principal (☰) ─────────────────────────────── */
+/* ── Menu principal (⚙, barre d'activité) ───────────── */
 .menu-overlay {
   position: fixed;
   inset: 0;
@@ -769,9 +978,14 @@ kbd {
 }
 
 .menu {
+  /* Ancré en bas à gauche, au-dessus du bouton ⚙ de la barre d'activité */
   position: absolute;
-  top: 46px;
-  right: 12px;
+  bottom: 10px;
+  left: 50px;
+  max-height: calc(100vh - 20px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
   min-width: 220px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -813,12 +1027,12 @@ kbd {
 }
 
 .menu-item.danger {
-  color: #f0a6a4;
+  color: var(--danger-text);
 }
 
 .menu-item.danger:hover,
 .menu-item.danger:focus {
-  background: rgba(217, 83, 79, 0.18);
+  background: var(--danger-soft);
 }
 
 /* Colonne de coche fixe : aligne tous les libellés, cochés ou non */
@@ -936,4 +1150,52 @@ kbd {
 .about-modal .modal-actions {
   justify-content: center;
   width: 100%;
+}
+
+/* ── Mode compact ───────────────────────────────────────
+   Densité type palette de commandes : paddings réduits, aperçu sur une
+   ligne, footer masqué. Activé via le menu ⚙ (classe posée sur <body>). */
+body.compact #content {
+  padding: 6px;
+  gap: 6px;
+}
+
+body.compact #search {
+  padding: 6px 0;
+  font-size: 14px;
+}
+
+body.compact #list {
+  gap: 2px;
+}
+
+body.compact .item {
+  padding: 4px 8px;
+  gap: 2px;
+  border-radius: 6px;
+}
+
+body.compact .preview {
+  font-size: 12px;
+}
+
+body.compact .preview.clamp {
+  -webkit-line-clamp: 1;
+}
+
+body.compact #hints {
+  display: none;
+}
+
+body.compact .chip {
+  padding: 2px 9px;
+  font-size: 11px;
+}
+
+body.compact .meta {
+  font-size: 10px;
+}
+
+body.compact .actions button {
+  padding: 2px 5px;
 }

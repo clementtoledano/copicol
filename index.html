@@ -9,27 +9,32 @@
   </head>
   <body>
     <main id="app">
-      <div id="searchbar">
-        <span id="search-icon">🔍</span>
-        <input
-          id="search"
-          type="text"
-          placeholder="Rechercher…"
-          autocomplete="off"
-          spellcheck="false"
-        />
-        <button id="menu-btn" type="button" title="Menu" aria-label="Menu">☰</button>
+      <nav id="activitybar" aria-label="Vues">
+        <!-- Les icônes SVG sont injectées au démarrage (voir init dans main.ts) -->
+        <button id="act-history" class="act-btn" type="button" title="Historique (Ctrl+1)" aria-label="Historique"></button>
+        <button id="act-favorites" class="act-btn" type="button" title="Favoris (Ctrl+2)" aria-label="Favoris">
+          <span id="act-fav-badge" class="act-badge" hidden></span>
+        </button>
+        <div class="act-spacer"></div>
+        <button id="act-menu" class="act-btn" type="button" title="Menu" aria-label="Menu"></button>
+      </nav>
+      <div id="content">
+        <div id="searchbar">
+          <span id="search-icon"></span>
+          <input
+            id="search"
+            type="text"
+            placeholder="Rechercher…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="search-clear" type="button" title="Effacer la recherche" aria-label="Effacer la recherche" hidden></button>
+        </div>
+        <div id="tabs"></div>
+        <ul id="list"></ul>
+        <!-- Raccourcis contextuels de la vue active (voir renderHints dans main.ts) -->
+        <footer id="hints"></footer>
       </div>
-      <div id="tabs"></div>
-      <ul id="list"></ul>
-      <footer id="hints">
-        <span><kbd>↑↓</kbd> naviguer</span>
-        <span><kbd>Entrée</kbd> copier</span>
-        <span><kbd>Ctrl+P</kbd> épingler</span>
-        <span><kbd>F2</kbd> renommer</span>
-        <span><kbd>Suppr</kbd> supprimer</span>
-        <span><kbd>Échap</kbd> fermer</span>
-      </footer>
     </main>
   </body>
 </html>

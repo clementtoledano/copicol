@@ -211,6 +211,22 @@ pub fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String
     crate::apply_autostart(&app, enabled)
 }
 
+// ── Préférences d'interface ──────────────────────────────────────────
+
+/// Lit une préférence d'interface (thème, densité…). `None` si jamais définie.
+#[tauri::command]
+pub fn get_ui_pref(state: State<AppState>, key: String) -> Result<Option<String>, String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::ui_pref(&conn, &key).map_err(|e| e.to_string())
+}
+
+/// Mémorise une préférence d'interface.
+#[tauri::command]
+pub fn set_ui_pref(state: State<AppState>, key: String, value: String) -> Result<(), String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::set_ui_pref(&conn, &key, &value).map_err(|e| e.to_string())
+}
+
 // ── Import / export des favoris ─────────────────────────────────────
 
 /// Résumé d'un import, remonté à l'interface.

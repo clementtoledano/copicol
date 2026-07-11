@@ -11,6 +11,7 @@ import {
   ensureNotificationPermission,
   exportFavorites,
   getAutostartEnabled,
+  getUiPref,
   hideWindow,
   importFavorites,
   installPendingUpdate,
@@ -31,12 +32,14 @@ import {
   setAutostartEnabled,
   setItemGroup,
   setItemKind,
+  setUiPref,
   unpinItem,
   updateItemContent,
   type Group,
   type Item,
   type KindCount,
 } from "./api";
+import { icon, type IconName } from "./icons";
 
 /** Dépôt du projet, affiché dans la fenêtre « À propos ». */
 const REPO_URL = "https://github.com/clementtoledano/copicol";
@@ -44,22 +47,27 @@ const REPO_URL = "https://github.com/clementtoledano/copicol";
 const searchInput = document.getElementById("search") as HTMLInputElement;
 const listEl = document.getElementById("list") as HTMLUListElement;
 const tabsEl = document.getElementById("tabs") as HTMLDivElement;
-const menuBtn = document.getElementById("menu-btn") as HTMLButtonElement;
+const actHistoryBtn = document.getElementById("act-history") as HTMLButtonElement;
+const actFavoritesBtn = document.getElementById("act-favorites") as HTMLButtonElement;
+const actMenuBtn = document.getElementById("act-menu") as HTMLButtonElement;
+const actFavBadge = document.getElementById("act-fav-badge") as HTMLSpanElement;
+const searchClearBtn = document.getElementById("search-clear") as HTMLButtonElement;
+const hintsEl = document.getElementById("hints") as HTMLElement;
 
-const KIND_META: Record<string, { label: string; icon: string }> = {
-  sql: { label: "SQL", icon: "🗄️" },
-  code: { label: "Code", icon: "⌨️" },
-  url: { label: "URL", icon: "🔗" },
-  email: { label: "Email", icon: "✉️" },
-  json: { label: "JSON", icon: "🧩" },
-  color: { label: "Couleur", icon: "🎨" },
-  phone: { label: "Téléphone", icon: "📞" },
-  path: { label: "Chemin", icon: "📁" },
-  text: { label: "Texte", icon: "📄" },
+const KIND_META: Record<string, { label: string; icon: IconName }> = {
+  sql: { label: "SQL", icon: "database" },
+  code: { label: "Code", icon: "code" },
+  url: { label: "URL", icon: "link" },
+  email: { label: "Email", icon: "mail" },
+  json: { label: "JSON", icon: "braces" },
+  color: { label: "Couleur", icon: "palette" },
+  phone: { label: "Téléphone", icon: "phone" },
+  path: { label: "Chemin", icon: "folder" },
+  text: { label: "Texte", icon: "file-text" },
 };
 
-function kindMeta(kind: string): { label: string; icon: string } {
-  return KIND_META[kind] ?? { label: kind, icon: "📄" };
+function kindMeta(kind: string): { label: string; icon: IconName } {
+  return KIND_META[kind] ?? { label: kind, icon: "file-text" };
 }
 
 /// Catégories proposées pour la reclassification manuelle d'un favori
@@ -72,17 +80,24 @@ let groups: Group[] = [];
 let favCount = 0;
 let selectedIndex = 0;
 let activeKind: string | null = null;
-// Onglet Favoris actif : affiche les épinglés (exclusifs des autres onglets).
+// Vue Favoris active (barre d'activité) : affiche les épinglés,
+// exclusifs de la vue Historique.
 let showFavorites = false;
-// Mode de regroupement dans l'onglet Favoris : par dossier créé par
-// l'utilisateur, ou par catégorie auto-détectée.
+// Mode de regroupement de la vue Favoris : par dossier créé par l'utilisateur
+// ou par catégorie auto-détectée (toggle en haut de la liste).
 type FavView = "groups" | "kinds";
 let favView: FavView = "groups";
+// Les deux vues de la barre d'activité.
+type View = "history" | "favorites";
 // Favoris dont la carte est dépliée (aperçu visible) dans l'onglet Favoris.
 const expandedFavIds = new Set<number>();
 // Préférence de démarrage automatique avec Windows ; activée par défaut,
 // rechargée au démarrage (voir init) et à chaque ouverture du menu ☰.
 let autostartEnabled = true;
+// Préférences d'apparence (persistées en base via get_ui_pref/set_ui_pref) :
+// thème clair et mode compact, appliquées par applyUiPrefs.
+let lightTheme = false;
+let compactMode = false;
 // Mise à jour détectée au démarrage (fenêtre encore cachée à ce moment) :
 // signalée par notification système, puis proposée à la prochaine ouverture
 // de la fenêtre (voir onWindowShown).
@@ -249,7 +264,7 @@ function promptKind(current: string): Promise<string | null> {
       const meta = kindMeta(kind);
       const btn = document.createElement("button");
       btn.className = kind === current ? "modal-btn kind-option active" : "modal-btn kind-option";
-      btn.textContent = `${meta.icon} ${meta.label}`;
+      btn.append(icon(meta.icon, 12), document.createTextNode(meta.label));
       btn.addEventListener("click", () => close(kind === current ? null : kind));
       grid.appendChild(btn);
     }
@@ -305,19 +320,20 @@ function promptGroup(current: number | null): Promise<GroupChoice | null> {
     const list = document.createElement("div");
     list.className = "group-picker";
 
-    const option = (label: string, active: boolean, onClick: () => void): void => {
+    const option = (label: string, active: boolean, onClick: () => void, ico?: IconName): void => {
       const btn = document.createElement("button");
       btn.className = active ? "modal-btn group-option active" : "modal-btn group-option";
-      btn.textContent = label;
+      if (ico) btn.appendChild(icon(ico, 12));
+      btn.appendChild(document.createTextNode(label));
       btn.addEventListener("click", onClick);
       list.appendChild(btn);
     };
 
     option("Sans dossier", current === null, () => close({ kind: "set", id: null }));
     for (const g of groups) {
-      option(`📁 ${g.name}`, current === g.id, () => close({ kind: "set", id: g.id }));
+      option(g.name, current === g.id, () => close({ kind: "set", id: g.id }), "folder");
     }
-    option("＋ Nouveau dossier…", false, () => close({ kind: "new" }));
+    option("Nouveau dossier…", false, () => close({ kind: "new" }), "plus");
 
     const actions = document.createElement("div");
     actions.className = "modal-actions";
@@ -394,11 +410,12 @@ function promptFavoriteCreate(): Promise<{ name: string; groupId: number | null 
     let selectedGroupId: number | null = null;
     let creatingNew = false;
 
-    const option = (label: string, active: boolean, onClick: () => void): void => {
+    const option = (label: string, active: boolean, onClick: () => void, ico?: IconName): void => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = active ? "modal-btn group-option active" : "modal-btn group-option";
-      btn.textContent = label;
+      if (ico) btn.appendChild(icon(ico, 12));
+      btn.appendChild(document.createTextNode(label));
       btn.addEventListener("click", onClick);
       list.appendChild(btn);
     };
@@ -413,23 +430,33 @@ function promptFavoriteCreate(): Promise<{ name: string; groupId: number | null 
         sync();
       });
       for (const g of groups) {
-        option(`📁 ${g.name}`, !creatingNew && selectedGroupId === g.id, () => {
-          creatingNew = false;
-          selectedGroupId = g.id;
-          newGroupInput.hidden = true;
-          newGroupCounter.hidden = true;
-          renderOptions();
-          sync();
-        });
+        option(
+          g.name,
+          !creatingNew && selectedGroupId === g.id,
+          () => {
+            creatingNew = false;
+            selectedGroupId = g.id;
+            newGroupInput.hidden = true;
+            newGroupCounter.hidden = true;
+            renderOptions();
+            sync();
+          },
+          "folder",
+        );
       }
-      option("＋ Nouveau dossier…", creatingNew, () => {
-        creatingNew = true;
-        newGroupInput.hidden = false;
-        newGroupCounter.hidden = false;
-        renderOptions();
-        newGroupInput.focus();
-        sync();
-      });
+      option(
+        "Nouveau dossier…",
+        creatingNew,
+        () => {
+          creatingNew = true;
+          newGroupInput.hidden = false;
+          newGroupCounter.hidden = false;
+          renderOptions();
+          newGroupInput.focus();
+          sync();
+        },
+        "plus",
+      );
     };
     renderOptions();
 
@@ -901,8 +928,7 @@ async function editFavoriteContent(item: Item): Promise<void> {
 async function refresh(): Promise<void> {
   const search = searchInput.value.trim();
   [kinds, favCount, groups] = await Promise.all([listKinds(), countFavorites(), listGroups()]);
-  // Les onglets ont pu se vider (dernier élément retiré) : retour à Tous
-  if (showFavorites && favCount === 0) showFavorites = false;
+  // L'onglet actif a pu se vider (dernier élément retiré) : retour à Tous
   if (activeKind !== null && !kinds.some((k) => k.kind === activeKind)) {
     activeKind = null;
   }
@@ -914,47 +940,110 @@ async function refresh(): Promise<void> {
     items = await listItems(search, activeKind);
   }
   if (selectedIndex >= items.length) selectedIndex = Math.max(0, items.length - 1);
+  searchClearBtn.hidden = searchInput.value.length === 0;
+  updateActivityBar();
   renderTabs();
   renderList();
+  renderHints();
+}
+
+/// Raccourcis affichés en pied de fenêtre, adaptés à la vue active :
+/// 4 hints max pour laisser respirer la liste.
+const VIEW_HINTS: Record<View, Array<[string, string]>> = {
+  history: [
+    ["↑↓", "naviguer"],
+    ["Entrée", "copier"],
+    ["Ctrl+P", "épingler"],
+    ["Échap", "fermer"],
+  ],
+  favorites: [
+    ["↑↓", "naviguer"],
+    ["Entrée", "copier"],
+    ["F2", "renommer"],
+    ["Échap", "fermer"],
+  ],
+};
+
+function renderHints(): void {
+  hintsEl.innerHTML = "";
+  for (const [key, label] of VIEW_HINTS[currentView()]) {
+    const span = document.createElement("span");
+    const kbd = document.createElement("kbd");
+    kbd.textContent = key;
+    span.append(kbd, document.createTextNode(` ${label}`));
+    hintsEl.appendChild(span);
+  }
+}
+
+/// Vue affichée par la barre d'activité, déduite de l'état existant.
+function currentView(): View {
+  return showFavorites ? "favorites" : "history";
+}
+
+/// Bascule de vue (clic ou Ctrl+1/2/3). `grouping` force en plus le mode de
+/// regroupement des favoris ; sans lui, le dernier mode choisi est conservé.
+function setView(view: View, grouping?: FavView): void {
+  const sameGrouping = grouping === undefined || grouping === favView;
+  if (view === currentView() && sameGrouping) return;
+  showFavorites = view === "favorites";
+  if (grouping) favView = grouping;
+  activeKind = null;
+  selectedIndex = 0;
+  void refresh();
+}
+
+/// Synchronise la barre d'activité : vue active en surbrillance (liseré accent)
+/// et compteur de favoris en badge sur l'icône étoile.
+function updateActivityBar(): void {
+  const view = currentView();
+  actHistoryBtn.classList.toggle("active", view === "history");
+  actFavoritesBtn.classList.toggle("active", view === "favorites");
+  actFavBadge.textContent = String(favCount);
+  actFavBadge.hidden = favCount === 0;
 }
 
 function renderTabs(): void {
   tabsEl.innerHTML = "";
+  tabsEl.hidden = false;
+
+  // Vue Favoris : un toggle de regroupement à la place des onglets par type.
+  if (showFavorites) {
+    const mkToggle = (label: string, ico: IconName, grouping: FavView): void => {
+      const btn = document.createElement("button");
+      btn.className = favView === grouping ? "chip active" : "chip";
+      btn.append(icon(ico, 12), document.createTextNode(label));
+      btn.addEventListener("click", () => {
+        if (favView === grouping) return;
+        favView = grouping;
+        selectedIndex = 0;
+        void refresh();
+      });
+      tabsEl.appendChild(btn);
+    };
+    mkToggle("Par dossier", "folder", "groups");
+    mkToggle("Par catégorie", "star", "kinds");
+    return;
+  }
 
   const total = kinds.reduce((sum, k) => sum + k.count, 0);
   const all = document.createElement("button");
-  all.className = !showFavorites && activeKind === null ? "chip active" : "chip";
+  all.className = activeKind === null ? "chip active" : "chip";
   all.textContent = total > 0 ? `Tous (${total})` : "Tous";
   all.addEventListener("click", () => {
-    showFavorites = false;
     activeKind = null;
     selectedIndex = 0;
     void refresh();
   });
   tabsEl.appendChild(all);
 
-  // Onglet Favoris, dès qu'il existe au moins un favori
-  if (favCount > 0) {
-    const fav = document.createElement("button");
-    fav.className = showFavorites ? "chip active" : "chip";
-    fav.textContent = `⭐ Favoris (${favCount})`;
-    fav.addEventListener("click", () => {
-      showFavorites = !showFavorites;
-      activeKind = null;
-      selectedIndex = 0;
-      void refresh();
-    });
-    tabsEl.appendChild(fav);
-  }
-
   // Un onglet par type présent dans l'historique, les plus fournis d'abord
   for (const kc of kinds) {
     const meta = kindMeta(kc.kind);
     const btn = document.createElement("button");
-    btn.className = !showFavorites && activeKind === kc.kind ? "chip active" : "chip";
-    btn.textContent = `${meta.icon} ${meta.label} (${kc.count})`;
+    btn.className = activeKind === kc.kind ? "chip active" : "chip";
+    btn.classList.add(`kind-${kc.kind}`);
+    btn.append(icon(meta.icon, 12), document.createTextNode(`${meta.label} (${kc.count})`));
     btn.addEventListener("click", () => {
-      showFavorites = false;
       activeKind = activeKind === kc.kind ? null : kc.kind;
       selectedIndex = 0;
       void refresh();
@@ -969,15 +1058,25 @@ function renderList(): void {
   if (items.length === 0) {
     const empty = document.createElement("li");
     empty.className = "empty";
+    const searching = searchInput.value.trim().length > 0;
+    const title = document.createElement("div");
+    title.className = "empty-title";
+    const sub = document.createElement("div");
+    sub.className = "empty-sub";
     if (showFavorites) {
-      empty.textContent = searchInput.value
-        ? "Aucun favori ne correspond"
-        : "Aucun favori — épinglez un élément (Ctrl+P)";
+      empty.appendChild(icon("star", 36));
+      title.textContent = searching ? "Aucun favori ne correspond" : "Aucun favori";
+      sub.textContent = searching
+        ? "Essayez un autre terme de recherche."
+        : "Épinglez un élément de l'historique (Ctrl+P), il apparaîtra ici.";
     } else {
-      empty.textContent = searchInput.value
-        ? "Aucun résultat"
-        : "L'historique est vide — copiez quelque chose !";
+      empty.appendChild(icon(searching ? "search" : "history", 36));
+      title.textContent = searching ? "Aucun résultat" : "L'historique est vide";
+      sub.textContent = searching
+        ? "Essayez un autre terme ou un autre onglet."
+        : "Copiez quelque chose, il apparaîtra ici.";
     }
+    empty.append(title, sub);
     listEl.appendChild(empty);
     return;
   }
@@ -998,7 +1097,8 @@ function renderList(): void {
       const titleEl = document.createElement("div");
       titleEl.className = "item-title";
       const star = document.createElement("span");
-      star.textContent = "⭐";
+      star.className = "star-ico";
+      star.appendChild(icon("star", 12));
       titleEl.appendChild(star);
       const label = document.createElement("span");
       label.className = "item-title-text";
@@ -1013,7 +1113,7 @@ function renderList(): void {
     }
 
     const preview = document.createElement("div");
-    preview.className = MONO_KINDS.has(item.kind) ? "preview mono" : "preview";
+    preview.className = MONO_KINDS.has(item.kind) ? "preview mono clamp" : "preview clamp";
     fillPreview(preview, item.content, searchInput.value.trim());
 
     const meta = document.createElement("div");
@@ -1023,12 +1123,12 @@ function renderList(): void {
     if (item.pinned && !item.label) {
       const pin = document.createElement("span");
       pin.className = "badge pin-badge";
-      pin.textContent = "⭐";
+      pin.appendChild(icon("star", 12));
       meta.appendChild(pin);
     }
 
     const kindBadge = document.createElement("span");
-    kindBadge.className = "badge kind-badge";
+    kindBadge.className = `badge kind-badge kind-${item.kind}`;
     const km = kindMeta(item.kind);
     if (item.kind === "color") {
       // Pastille de la couleur réelle à côté du libellé
@@ -1038,7 +1138,7 @@ function renderList(): void {
       kindBadge.appendChild(swatch);
       kindBadge.appendChild(document.createTextNode(` ${km.label}`));
     } else {
-      kindBadge.textContent = `${km.icon} ${km.label}`;
+      kindBadge.append(icon(km.icon, 11), document.createTextNode(km.label));
     }
     meta.appendChild(kindBadge);
 
@@ -1048,13 +1148,14 @@ function renderList(): void {
     time.title = new Date(item.created_at * 1000).toLocaleString("fr-FR");
     meta.appendChild(time);
 
-    // Actions au survol : épingler, supprimer
+    // Actions au survol : épingler, supprimer — en bout de ligne meta,
+    // dans le flux (elles ne recouvrent plus le texte de l'aperçu).
     const actions = document.createElement("div");
     actions.className = "actions";
 
     const pinBtn = document.createElement("button");
     pinBtn.title = item.pinned ? "Désépingler" : "Épingler";
-    pinBtn.textContent = item.pinned ? "📌" : "📍";
+    pinBtn.appendChild(icon(item.pinned ? "pin-off" : "pin", 13));
     pinBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       void togglePinFlow(item);
@@ -1063,16 +1164,16 @@ function renderList(): void {
 
     const delBtn = document.createElement("button");
     delBtn.title = "Supprimer";
-    delBtn.textContent = "🗑️";
+    delBtn.appendChild(icon("trash", 13));
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       void deleteItem(item.id).then(refresh);
     });
     actions.appendChild(delBtn);
 
+    meta.appendChild(actions);
     li.appendChild(preview);
     li.appendChild(meta);
-    li.appendChild(actions);
 
     li.addEventListener("click", () => copyWithFlash(index));
     li.addEventListener("mousemove", () => {
@@ -1120,32 +1221,34 @@ function favTag(item: Item): HTMLSpanElement | null {
   span.className = "fav-tag";
   if (favView === "groups") {
     const meta = kindMeta(item.kind);
-    span.textContent = `${meta.icon} ${meta.label}`;
+    span.classList.add("kind-badge", `kind-${item.kind}`);
+    span.append(icon(meta.icon, 10), document.createTextNode(meta.label));
     return span;
   }
   if (item.group_id === null) return null;
   const g = groups.find((x) => x.id === item.group_id);
   if (!g) return null;
-  span.textContent = `📁 ${g.name}`;
+  span.append(icon("folder", 10), document.createTextNode(g.name));
   return span;
 }
 
 /// Clé et libellé de la section d'un favori selon la vue active (dossier ou
 /// catégorie), pour afficher les en-têtes et savoir quand en insérer un.
-function favSection(item: Item): { key: string; label: string } {
+function favSection(item: Item): { key: string; label: string; icon?: IconName } {
   if (favView === "groups") {
     const g = item.group_id !== null ? groups.find((x) => x.id === item.group_id) : undefined;
-    return g ? { key: `g${g.id}`, label: `📁 ${g.name}` } : { key: "none", label: "Sans dossier" };
+    return g
+      ? { key: `g${g.id}`, label: g.name, icon: "folder" }
+      : { key: "none", label: "Sans dossier" };
   }
   const meta = kindMeta(item.kind);
-  return { key: item.kind, label: `${meta.icon} ${meta.label}` };
+  return { key: item.kind, label: meta.label, icon: meta.icon };
 }
 
-/// Rend l'onglet Favoris : sélecteur de vue (dossiers/catégories), puis en-têtes
-/// de section et lignes compactes (nom + loupe). `items` est déjà en ordre
-/// groupé (voir groupFavoritesByGroup / groupFavoritesByKind).
+/// Rend les vues Favoris/Dossiers : en-têtes de section et lignes compactes
+/// (nom + loupe). `items` est déjà en ordre groupé (voir
+/// groupFavoritesByGroup / groupFavoritesByKind).
 function renderFavorites(): void {
-  renderFavViewToggle();
   let currentKey: string | null = null;
   items.forEach((item, index) => {
     const section = favSection(item);
@@ -1153,21 +1256,45 @@ function renderFavorites(): void {
       currentKey = section.key;
       const header = document.createElement("li");
       header.className = "fav-header";
-      header.textContent = section.label;
+      if (section.icon) header.appendChild(icon(section.icon, 10));
+      header.appendChild(document.createTextNode(section.label));
       listEl.appendChild(header);
     }
     listEl.appendChild(buildFavoriteRow(item, index));
   });
 }
 
-/// Change le mode de regroupement des favoris (catégorie ou dossier) et
-/// rafraîchit l'affichage. Point d'entrée unique du menu ☰ et de la barre de
-/// bascule de l'onglet Favoris.
-function setFavView(view: FavView): void {
-  if (favView === view) return;
-  favView = view;
-  selectedIndex = 0;
-  void refresh();
+/// Applique les préférences d'apparence au DOM : attribut `data-theme` sur
+/// <html> (voir les jeux de variables CSS) et classe `compact` sur <body>.
+function applyUiPrefs(): void {
+  document.documentElement.dataset.theme = lightTheme ? "light" : "dark";
+  document.body.classList.toggle("compact", compactMode);
+}
+
+/// Bascule le thème clair/sombre : application immédiate, persistance en base
+/// (non fatale : le thème reste appliqué pour la session même si l'écriture échoue).
+async function toggleTheme(): Promise<void> {
+  lightTheme = !lightTheme;
+  applyUiPrefs();
+  await setUiPref("theme", lightTheme ? "light" : "dark").catch((err) => console.error(err));
+}
+
+/// Bascule le mode compact (liste dense, aperçu sur une ligne, footer masqué).
+async function toggleCompact(): Promise<void> {
+  compactMode = !compactMode;
+  applyUiPrefs();
+  await setUiPref("compact", compactMode ? "1" : "0").catch((err) => console.error(err));
+}
+
+/// Recharge les préférences d'apparence depuis la base (démarrage, import).
+async function loadUiPrefs(): Promise<void> {
+  const [theme, compact] = await Promise.all([
+    getUiPref("theme").catch(() => null),
+    getUiPref("compact").catch(() => null),
+  ]);
+  lightTheme = theme === "light";
+  compactMode = compact === "1";
+  applyUiPrefs();
 }
 
 /// Bascule la préférence de démarrage automatique avec Windows. En cas
@@ -1182,27 +1309,6 @@ async function toggleAutostart(): Promise<void> {
     console.error(err);
     alert("Impossible de modifier le démarrage automatique : " + String(err));
   }
-}
-
-/// Petit sélecteur en tête de l'onglet Favoris pour basculer entre un
-/// regroupement par catégorie auto-détectée et par dossier créé par l'utilisateur.
-function renderFavViewToggle(): void {
-  const bar = document.createElement("li");
-  bar.className = "fav-view-toggle";
-
-  const make = (view: FavView, label: string): HTMLButtonElement => {
-    const btn = document.createElement("button");
-    btn.className = favView === view ? "fav-view-btn active" : "fav-view-btn";
-    btn.textContent = label;
-    btn.addEventListener("click", () => setFavView(view));
-    return btn;
-  };
-
-  const caption = document.createElement("span");
-  caption.className = "fav-view-caption";
-  caption.textContent = "Grouper par";
-  bar.append(caption, make("groups", "Dossiers"), make("kinds", "Catégories"));
-  listEl.appendChild(bar);
 }
 
 /// Une ligne de favori : nom + loupe. La loupe déplie/replie la carte en place
@@ -1229,7 +1335,7 @@ function buildFavoriteRow(item: Item, index: number): HTMLLIElement {
   const loupe = document.createElement("button");
   loupe.className = "fav-loupe";
   loupe.title = expanded ? "Replier" : "Aperçu";
-  loupe.textContent = expanded ? "▾" : "🔍";
+  loupe.appendChild(icon(expanded ? "chevron-down" : "eye", 13));
   loupe.addEventListener("click", (e) => {
     e.stopPropagation();
     if (expanded) expandedFavIds.delete(item.id);
@@ -1374,6 +1480,18 @@ document.addEventListener("keydown", (e) => {
       }
       break;
     }
+    // Bascule de vue : Ctrl+1 historique, Ctrl+2 favoris (dernier
+    // regroupement), Ctrl+3 favoris par dossier (compatibilité).
+    case "1":
+    case "2":
+    case "3": {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        if (e.key === "1") setView("history");
+        else setView("favorites", e.key === "3" ? "groups" : undefined);
+      }
+      break;
+    }
   }
 });
 
@@ -1410,8 +1528,8 @@ function setupResizeHandles(): void {
   }
 }
 
-// ── Menu principal (bouton ☰) ───────────────────────────
-// Un seul menu déroulant compact, ancré au bouton de la barre de recherche.
+// ── Menu principal (bouton ⚙ de la barre d'activité) ────
+// Un seul menu déroulant compact, ancré au-dessus du bouton ⚙.
 
 interface MenuEntry {
   label: string;
@@ -1424,8 +1542,8 @@ interface MenuEntry {
 /// Un nœud du menu : une entrée cliquable, un intitulé de section, ou un trait.
 type MenuNode = MenuEntry | { caption: string } | "separator";
 
-/// Ouvre le menu ☰ : un panneau flottant ancré sous le bouton. Se ferme au
-/// clic dehors, sur Échap, ou après le choix d'une entrée.
+/// Ouvre le menu ⚙ : un panneau flottant ancré au-dessus du bouton. Se ferme
+/// au clic dehors, sur Échap, ou après le choix d'une entrée.
 function openMainMenu(): void {
   // Un menu déjà ouvert : on bascule (referme).
   if (document.querySelector(".menu-overlay")) {
@@ -1434,10 +1552,6 @@ function openMainMenu(): void {
   }
 
   const nodes: MenuNode[] = [
-    { caption: "Affichage des favoris" },
-    { label: "Par dossier", checked: favView === "groups", onClick: () => setFavView("groups") },
-    { label: "Par catégorie", checked: favView === "kinds", onClick: () => setFavView("kinds") },
-    "separator",
     { caption: "Dossiers" },
     { label: "Nouveau dossier…", onClick: () => void createGroupFlow() },
   ];
@@ -1445,6 +1559,10 @@ function openMainMenu(): void {
     nodes.push({ label: "Gérer les dossiers…", onClick: () => void manageGroups() });
   }
   nodes.push(
+    "separator",
+    { caption: "Apparence" },
+    { label: "Thème clair", checked: lightTheme, onClick: () => void toggleTheme() },
+    { label: "Mode compact", checked: compactMode, onClick: () => void toggleCompact() },
     "separator",
     { caption: "Sauvegarde des favoris" },
     { label: "Exporter les favoris…", onClick: () => void exportFavoritesFlow() },
@@ -1548,7 +1666,7 @@ async function manageGroups(): Promise<void> {
       row.className = "group-manage-row";
       const name = document.createElement("span");
       name.className = "group-manage-name";
-      name.textContent = `📁 ${g.name}`;
+      name.append(icon("folder", 12), document.createTextNode(g.name));
       const rename = document.createElement("button");
       rename.className = "fav-action";
       rename.textContent = "Renommer";
@@ -1631,8 +1749,9 @@ async function importFavoritesFlow(): Promise<void> {
   try {
     const { imported, skipped } = await importFavorites(path);
     await refresh();
-    // Le fichier importé a pu changer des préférences (ex. démarrage auto)
+    // Le fichier importé a pu changer des préférences (ex. démarrage auto, thème)
     autostartEnabled = await getAutostartEnabled().catch(() => autostartEnabled);
+    await loadUiPrefs();
     const parts = [`${imported} favori(s) importé(s)`];
     if (skipped > 0) parts.push(`${skipped} ignoré(s) (déjà présents)`);
     alert(parts.join(", ") + ".");
@@ -1749,12 +1868,39 @@ async function showAbout(): Promise<void> {
   done.focus();
 }
 
+/// Rejoue l'animation d'apparition (fondu + zoom léger) à chaque affichage
+/// de la fenêtre par le raccourci global.
+function playShowTransition(): void {
+  const app = document.getElementById("app");
+  if (!app) return;
+  app.classList.remove("app-in");
+  void app.offsetWidth; // force un reflow pour relancer l'animation
+  app.classList.add("app-in");
+}
+
 async function init(): Promise<void> {
+  // Icônes fixes de la coquille (barre d'activité, recherche)
+  actHistoryBtn.appendChild(icon("history", 18));
+  actFavoritesBtn.prepend(icon("star", 18));
+  actMenuBtn.appendChild(icon("settings", 18));
+  document.getElementById("search-icon")?.appendChild(icon("search", 14));
+  searchClearBtn.appendChild(icon("x", 13));
+  searchClearBtn.addEventListener("click", () => {
+    searchInput.value = "";
+    selectedIndex = 0;
+    searchInput.focus();
+    void refresh();
+  });
+
   setupResizeHandles();
+  // Apparence d'abord : évite un flash du thème sombre par défaut au démarrage
+  await loadUiPrefs();
   await refresh();
   autostartEnabled = await getAutostartEnabled().catch(() => true);
 
-  menuBtn.addEventListener("click", (e) => {
+  actHistoryBtn.addEventListener("click", () => setView("history"));
+  actFavoritesBtn.addEventListener("click", () => setView("favorites"));
+  actMenuBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     openMainMenu();
   });
@@ -1765,6 +1911,7 @@ async function init(): Promise<void> {
 
   await onClipboardChanged(() => void refresh());
   await onWindowShown(() => {
+    playShowTransition();
     closeModals(); // au cas où la fenêtre a été cachée pendant une saisie
     expandedFavIds.clear();
     searchInput.value = "";
