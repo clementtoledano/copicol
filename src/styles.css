@@ -1291,3 +1291,161 @@ body.compact .thumb {
   width: 64px;
   height: 36px;
 }
+
+/* ── Éditeur d'annotation ────────────────────────────── */
+.annot-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-radius: 9px;
+  outline: none;
+}
+
+.annot-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.annot-title {
+  flex: 1;
+  font-weight: 600;
+}
+
+.annot-btn,
+.annot-tool,
+.annot-menu-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.annot-btn {
+  width: 30px;
+  height: 28px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.annot-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.annot-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 10px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.annot-canvas {
+  display: block;
+  touch-action: none;
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.annot-toolbar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--window-border);
+  border-radius: 8px;
+}
+
+.annot-tool {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 6px;
+}
+
+.annot-tool:hover,
+.annot-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.annot-tool.on,
+.annot-menu-item.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.annot-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--border);
+}
+
+.annot-swatch {
+  width: 16px;
+  height: 16px;
+  margin: 0 3px;
+  border-radius: 50%;
+  border: 1px solid var(--window-border);
+  cursor: pointer;
+}
+
+.annot-swatch.on {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.annot-menu {
+  position: absolute;
+  bottom: 54px;
+  left: 50%;
+  transform: translateX(-60px);
+  display: flex;
+  flex-direction: column;
+  min-width: 130px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--window-border);
+  border-radius: 8px;
+}
+
+.annot-menu[hidden] {
+  display: none;
+}
+
+.annot-menu-item {
+  justify-content: flex-start;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.annot-text-input {
+  position: absolute;
+  min-width: 120px;
+  padding: 0 2px;
+  background: transparent;
+  border: 1px dashed var(--accent);
+  outline: none;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-weight: 600;
+  user-select: text;
+}

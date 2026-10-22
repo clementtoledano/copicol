@@ -12,6 +12,7 @@ import {
   exportFavorites,
   getAutostartEnabled,
   getChangelog,
+  getImage,
   getImageThumbnail,
   getUiPref,
   hideWindow,
@@ -31,6 +32,7 @@ import {
   pinItem,
   quitApp,
   renameGroup,
+  saveAnnotatedImage,
   setAutostartEnabled,
   setItemGroup,
   setItemKind,
@@ -42,6 +44,7 @@ import {
   type Item,
   type KindCount,
 } from "./api";
+import { openAnnotator } from "./annotate";
 import { icon, type IconName } from "./icons";
 
 /** Dépôt du projet, affiché dans la fenêtre « À propos ». */
@@ -157,9 +160,28 @@ function buildImagePreview(item: Item, detail: boolean): HTMLDivElement {
   return wrap;
 }
 
-/// Ouvre l'éditeur d'annotation sur une image (branché dans la tâche suivante).
+/// Ouvre l'éditeur d'annotation sur une image. À l'enregistrement, l'image
+/// annotée remplace l'originale, part dans le presse-papiers et la fenêtre se cache.
 async function annotateFlow(item: Item): Promise<void> {
-  void item;
+  if (!item.image || modalOpen) return;
+  modalOpen = true;
+  try {
+    const result = await openAnnotator(await getImage(item.id));
+    if (result) {
+      try {
+        await saveAnnotatedImage(item.id, result);
+      } catch (err) {
+        console.error(err);
+        alert(typeof err === "string" ? err : "Impossible d'enregistrer l'image annotée.");
+      }
+    }
+  } catch (err) {
+    console.error(err);
+    alert("Impossible d'ouvrir l'image.");
+  } finally {
+    modalOpen = false;
+  }
+  await refresh();
 }
 
 function relativeTime(unixSeconds: number): string {
