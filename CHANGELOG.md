@@ -3,7 +3,7 @@
 Notes de version de copicol. Chaque entrée liste les changements visibles
 pour l'utilisateur ; les détails techniques restent dans l'historique Git.
 
-## Non publié
+## 0.5.0
 
 ### Images
 
