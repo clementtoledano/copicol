@@ -94,12 +94,24 @@ pub enum CaptureSource {
 
 /// Choisit ce qu'on capture : le texte d'abord (Excel et Word posent aussi un
 /// bitmap), sauf si le HTML se réduit à une image (« Copier l'image » d'un
-/// navigateur, qui ajoute l'URL en texte).
-pub fn capture_source(text: Option<&str>, html: Option<&str>, has_image: bool) -> CaptureSource {
+/// navigateur, qui ajoute l'URL en texte). `image_done` : l'image de cette
+/// copie a déjà été traitée au poll précédent ; son URL en texte est alors
+/// ignorée au lieu de devenir une entrée texte.
+pub fn capture_source(
+    text: Option<&str>,
+    html: Option<&str>,
+    has_image: bool,
+    image_done: bool,
+) -> CaptureSource {
     let has_text = text.map(|t| !t.trim().is_empty()).unwrap_or(false);
     if has_text {
-        if has_image && html.map(html_is_single_img).unwrap_or(false) {
-            return CaptureSource::Image;
+        if html.map(html_is_single_img).unwrap_or(false) {
+            if has_image {
+                return CaptureSource::Image;
+            }
+            if image_done {
+                return CaptureSource::Nothing;
+            }
         }
         return CaptureSource::Text;
     }
@@ -178,21 +190,34 @@ mod tests {
     #[test]
     fn capture_source_excel_keeps_text() {
         let html = "<table><tr><td>2610S0200C005</td></tr></table>";
-        assert_eq!(capture_source(Some("2610S0200C005"), Some(html), true), CaptureSource::Text);
+        assert_eq!(capture_source(Some("2610S0200C005"), Some(html), true, false), CaptureSource::Text);
     }
 
     #[test]
     fn capture_source_browser_image_wins_over_url() {
         let html = "<img src=\"https://ex.com/a.png\">";
-        assert_eq!(capture_source(Some("https://ex.com/a.png"), Some(html), true), CaptureSource::Image);
+        assert_eq!(capture_source(Some("https://ex.com/a.png"), Some(html), true, false), CaptureSource::Image);
     }
 
     #[test]
     fn capture_source_basic_cases() {
-        assert_eq!(capture_source(None, None, true), CaptureSource::Image); // capture d'écran
-        assert_eq!(capture_source(Some("bonjour"), None, false), CaptureSource::Text);
-        assert_eq!(capture_source(Some("   "), None, false), CaptureSource::Nothing);
-        assert_eq!(capture_source(Some("  "), None, true), CaptureSource::Image);
-        assert_eq!(capture_source(None, None, false), CaptureSource::Nothing);
+        assert_eq!(capture_source(None, None, true, false), CaptureSource::Image); // capture d'écran
+        assert_eq!(capture_source(Some("bonjour"), None, false, false), CaptureSource::Text);
+        assert_eq!(capture_source(Some("   "), None, false, false), CaptureSource::Nothing);
+        assert_eq!(capture_source(Some("  "), None, true, false), CaptureSource::Image);
+        assert_eq!(capture_source(None, None, false, false), CaptureSource::Nothing);
+    }
+
+    #[test]
+    fn capture_source_browser_url_after_image_done_is_skipped() {
+        // Au poll suivant la capture, l'image n'est plus relue : l'URL en texte
+        // du même « Copier l'image » ne doit pas devenir une entrée texte.
+        let html = "<img src=\"https://ex.com/a.png\">";
+        assert_eq!(
+            capture_source(Some("https://ex.com/a.png"), Some(html), false, true),
+            CaptureSource::Nothing
+        );
+        // Un vrai texte (sans <img> seul) reste capturé même si l'image est traitée
+        assert_eq!(capture_source(Some("bonjour"), Some("<p>bonjour</p>"), false, true), CaptureSource::Text);
     }
 }

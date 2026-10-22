@@ -64,6 +64,14 @@ fn clipboard_seq() -> Option<u32> {
     None
 }
 
+/// Vrai si la lecture de l'image a abouti ou si le presse-papiers n'a
+/// définitivement pas de bitmap. Un échec transitoire (presse-papiers encore
+/// tenu par l'application source juste après la copie) doit être retenté au
+/// poll suivant, sans marquer la séquence comme traitée.
+fn image_read_settled<T>(read: &Result<T, arboard::Error>) -> bool {
+    !matches!(read, Err(e) if !matches!(e, arboard::Error::ContentNotAvailable))
+}
+
 /// Convertit l'image d'arboard en [`imaging::Rgba`].
 fn to_rgba(data: arboard::ImageData<'_>) -> imaging::Rgba {
     imaging::Rgba {
@@ -161,14 +169,21 @@ pub fn start(app: AppHandle, rx: Receiver<WatcherMsg>) {
 
                     let seq = clipboard_seq();
                     let image_already_done = seq.is_some() && seq == last_image_seq;
-                    let image = if (!has_text || browser_image) && !image_already_done {
-                        clipboard.get_image().ok()
+                    let read = if (!has_text || browser_image) && !image_already_done {
+                        Some(clipboard.get_image())
                     } else {
                         None
                     };
+                    let image_settled = read.as_ref().map(image_read_settled).unwrap_or(true);
+                    let image = read.and_then(|r| r.ok());
                     let has_image = image.is_some();
+                    // Lecture transitoirement impossible : on retente au poll suivant
+                    // (sinon l'URL en texte d'un « Copier l'image » serait capturée).
+                    if !image_settled && (browser_image || !has_text) {
+                        continue;
+                    }
 
-                    match imaging::capture_source(text.as_deref(), html.as_deref(), has_image) {
+                    match imaging::capture_source(text.as_deref(), html.as_deref(), has_image, image_already_done) {
                         imaging::CaptureSource::Text => {
                             let text = text.unwrap_or_default();
                             let hash = db::hash_content(&text);
@@ -312,4 +327,18 @@ pub fn write_item_to_clipboard(app: &AppHandle, id: i64) -> Result<(), String> {
     let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let _ = db::mark_used(&conn, id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_read_outcome_classification() {
+        // Image lue, ou absence définitive de bitmap : la séquence est traitée
+        assert!(image_read_settled(&Ok(())));
+        assert!(image_read_settled::<()>(&Err(arboard::Error::ContentNotAvailable)));
+        // Échec transitoire (presse-papiers tenu par l'appli source) : on réessaie
+        assert!(!image_read_settled::<()>(&Err(arboard::Error::ClipboardOccupied)));
+    }
 }

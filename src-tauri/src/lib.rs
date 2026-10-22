@@ -256,7 +256,9 @@ fn build_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             "quit" => confirm_quit(app),
             other => {
                 if let Some(fid) = other.strip_prefix("fav:").and_then(|s| s.parse::<i64>().ok()) {
-                    copy_favorite_to_clipboard(app, fid);
+                    // Décodage + attente du watcher : hors du thread principal
+                    let app = app.clone();
+                    std::thread::spawn(move || copy_favorite_to_clipboard(&app, fid));
                 }
             }
         })

@@ -282,7 +282,7 @@ pub fn import_favorites(app: AppHandle, path: String) -> Result<ImportSummary, S
 /// Copie un élément : écrit son contenu dans le presse-papiers et cache la
 /// fenêtre. Le collage reste à la charge de l'utilisateur (Ctrl+V dans
 /// l'application de son choix) : copicol ne simule aucune frappe.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn copy_item(app: AppHandle, id: i64) -> Result<(), String> {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
@@ -318,7 +318,7 @@ pub fn get_image(state: State<AppState>, id: i64) -> Result<tauri::ipc::Response
 /// l'élément est dans l'en-tête `x-item-id`. L'image remplace l'originale, est
 /// placée dans le presse-papiers (via le watcher), la fenêtre se cache et
 /// l'élément remonte en tête.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_annotated_image(app: AppHandle, request: tauri::ipc::Request) -> Result<(), String> {
     let id: i64 = request
         .headers()

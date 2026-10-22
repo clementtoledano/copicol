@@ -1080,7 +1080,9 @@ function confirmAction(message: string, confirmLabel: string): Promise<boolean> 
 /// Ferme toute modale résiduelle (ex. la fenêtre a été cachée pendant la saisie).
 function closeModals(): void {
   document.querySelectorAll(".modal-overlay, .menu-overlay").forEach((el) => el.remove());
-  modalOpen = false;
+  // L'éditeur d'annotation survit au masquage de la fenêtre (on retrouve ses
+  // dessins) : tant qu'il est ouvert, il garde la main sur le clavier.
+  modalOpen = document.querySelector(".annot-overlay") !== null;
 }
 
 /// Épinglage (nom obligatoire) ou désépinglage (confirmation, nom conservé).
@@ -2186,7 +2188,9 @@ async function init(): Promise<void> {
     expandedFavIds.clear();
     searchInput.value = "";
     selectedIndex = 0;
-    searchInput.focus();
+    const annotator = document.querySelector<HTMLElement>(".annot-overlay");
+    if (annotator) annotator.focus();
+    else searchInput.focus();
     void refresh();
     void promptPendingUpdate();
   });
