@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod detect;
+mod imaging;
 mod watcher;
 
 use std::sync::mpsc::{self, Sender};
