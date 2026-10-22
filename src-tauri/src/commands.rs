@@ -1,8 +1,5 @@
-use std::sync::mpsc;
-use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::watcher::WatcherMsg;
 use crate::{db, AppState};
 
 #[tauri::command]
@@ -287,15 +284,6 @@ pub fn import_favorites(app: AppHandle, path: String) -> Result<ImportSummary, S
 /// l'application de son choix) : copicol ne simule aucune frappe.
 #[tauri::command]
 pub fn copy_item(app: AppHandle, id: i64) -> Result<(), String> {
-    let state = app.state::<AppState>();
-
-    let content = {
-        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        db::get_content(&conn, id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "élément introuvable".to_string())?
-    };
-
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
     }
@@ -303,22 +291,5 @@ pub fn copy_item(app: AppHandle, id: i64) -> Result<(), String> {
     // L'écriture passe par le thread watcher (unique propriétaire du
     // presse-papiers), qui met aussi à jour son hash pour ne pas
     // réinsérer ce contenu dans l'historique.
-    let (ack_tx, ack_rx) = mpsc::channel();
-    state
-        .watcher_tx
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .send(WatcherMsg::Write {
-            text: content,
-            ack: ack_tx,
-        })
-        .map_err(|e| e.to_string())?;
-    let _ = ack_rx.recv_timeout(Duration::from_secs(1));
-
-    {
-        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        let _ = db::mark_used(&conn, id);
-    }
-
-    Ok(())
+    crate::watcher::write_item_to_clipboard(&app, id)
 }

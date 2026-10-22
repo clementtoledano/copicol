@@ -88,7 +88,10 @@ fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             f.label
                 .clone()
                 .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| tray_label_fallback(&f.content))
+                .unwrap_or_else(|| match &f.image {
+                    Some(m) => format!("Image {} × {}", m.width, m.height),
+                    None => tray_label_fallback(&f.content),
+                })
         };
         let mut first_section = true;
         // Une section par dossier (dans l'ordre des dossiers), les favoris sans
@@ -211,31 +214,9 @@ pub(crate) fn sync_autostart(app: &AppHandle) {
 /// (via le thread watcher, pour ne pas le réinsérer dans l'historique) et
 /// incrémente son compteur d'usage. L'utilisateur colle ensuite (Ctrl+V).
 fn copy_favorite_to_clipboard(app: &AppHandle, id: i64) {
-    let state = app.state::<AppState>();
-    let content = {
-        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        match db::get_content(&conn, id) {
-            Ok(Some(c)) => c,
-            _ => return,
-        }
-    };
-
-    let (ack_tx, ack_rx) = mpsc::channel();
-    if state
-        .watcher_tx
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .send(WatcherMsg::Write {
-            text: content,
-            ack: ack_tx,
-        })
-        .is_ok()
-    {
-        let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(1));
+    if let Err(e) = watcher::write_item_to_clipboard(app, id) {
+        log::warn!("copicol: copie du favori impossible: {e}");
     }
-
-    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
-    let _ = db::mark_used(&conn, id);
 }
 
 /// Demande confirmation avant de quitter (boîte de dialogue native, non
