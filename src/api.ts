@@ -13,6 +13,16 @@ export interface Item {
   group_id: number | null;
   created_at: number;
   use_count: number;
+  /** Dimensions et poids d'une image (kind "image") ; null pour un texte. */
+  image: ImageMeta | null;
+}
+
+/** Métadonnées d'une image : miroir de `db::ImageMeta`. */
+export interface ImageMeta {
+  width: number;
+  height: number;
+  /** Poids du PNG stocké, en octets. */
+  bytes: number;
 }
 
 export interface KindCount {
@@ -249,4 +259,22 @@ export async function notifyUpdateAvailable(version: string): Promise<void> {
     title: "Mise à jour copicol disponible",
     body: `Version ${version} — ouvrez copicol pour l'installer.`,
   });
+}
+
+/** Miniature PNG d'une image de l'historique ou des favoris. */
+export function getImageThumbnail(id: number): Promise<ArrayBuffer> {
+  return invoke("get_image_thumbnail", { id });
+}
+
+/** Image complète (PNG), pour l'éditeur d'annotation. */
+export function getImage(id: number): Promise<ArrayBuffer> {
+  return invoke("get_image", { id });
+}
+
+/**
+ * Remplace l'image de l'élément par sa version annotée, la place dans le
+ * presse-papiers, cache la fenêtre et remonte l'élément en tête.
+ */
+export function saveAnnotatedImage(id: number, png: Uint8Array): Promise<void> {
+  return invoke("save_annotated_image", png, { headers: { "x-item-id": String(id) } });
 }

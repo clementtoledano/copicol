@@ -385,6 +385,9 @@ pub fn run() {
             commands::get_ui_pref,
             commands::set_ui_pref,
             commands::get_changelog,
+            commands::get_image_thumbnail,
+            commands::get_image,
+            commands::save_annotated_image,
         ])
         .run(tauri::generate_context!())
         .expect("erreur au lancement de copicol");

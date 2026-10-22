@@ -293,3 +293,88 @@ pub fn copy_item(app: AppHandle, id: i64) -> Result<(), String> {
     // réinsérer ce contenu dans l'historique.
     crate::watcher::write_item_to_clipboard(&app, id)
 }
+
+/// Miniature PNG d'une image (octets bruts, sans sérialisation JSON).
+#[tauri::command]
+pub fn get_image_thumbnail(state: State<AppState>, id: i64) -> Result<tauri::ipc::Response, String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::get_image_thumb(&conn, id)
+        .map_err(|e| e.to_string())?
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| "image introuvable".to_string())
+}
+
+/// Image complète (PNG, octets bruts) pour l'éditeur d'annotation.
+#[tauri::command]
+pub fn get_image(state: State<AppState>, id: i64) -> Result<tauri::ipc::Response, String> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    db::get_image_png(&conn, id)
+        .map_err(|e| e.to_string())?
+        .map(tauri::ipc::Response::new)
+        .ok_or_else(|| "image introuvable".to_string())
+}
+
+/// Enregistre une image annotée : le corps de la requête est le PNG, l'id de
+/// l'élément est dans l'en-tête `x-item-id`. L'image remplace l'originale, est
+/// placée dans le presse-papiers (via le watcher), la fenêtre se cache et
+/// l'élément remonte en tête.
+#[tauri::command]
+pub fn save_annotated_image(app: AppHandle, request: tauri::ipc::Request) -> Result<(), String> {
+    let id: i64 = request
+        .headers()
+        .get("x-item-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(|| "identifiant manquant".to_string())?;
+    let tauri::ipc::InvokeBody::Raw(png) = request.body() else {
+        return Err("image manquante".to_string());
+    };
+
+    let rgba = crate::imaging::decode(png)?;
+    if !crate::imaging::within_limits(rgba.width, rgba.height) {
+        return Err("image trop grande".to_string());
+    }
+
+    let state = app.state::<AppState>();
+    let (is_image, pinned) = {
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let pinned = conn
+            .query_row("SELECT pinned FROM items WHERE id = ?1", [id], |r| r.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?
+            != 0;
+        (db::is_image(&conn, id).map_err(|e| e.to_string())?, pinned)
+    };
+    if !is_image {
+        return Err("cet élément n'est pas une image".to_string());
+    }
+
+    let own_hash = crate::imaging::image_hash(&rgba);
+    // Le hash relu après écriture est celui que le poll suivant retrouvera.
+    let hash = crate::watcher::write_image_to_clipboard(&app, crate::imaging::Rgba {
+        width: rgba.width,
+        height: rgba.height,
+        pixels: rgba.pixels.clone(),
+    })?
+    .unwrap_or(own_hash);
+
+    let new = db::new_image(&rgba, hash)?;
+    {
+        let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        db::replace_image(&conn, id, &new, crate::watcher::now_unix()).map_err(|e| {
+            if matches!(e, rusqlite::Error::SqliteFailure(ref f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation) {
+                "Une image identique existe déjà dans l'historique.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+    }
+
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    let _ = app.emit("clipboard-changed", ());
+    if pinned {
+        crate::refresh_tray_menu(&app);
+    }
+    Ok(())
+}
