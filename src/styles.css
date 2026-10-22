@@ -1249,3 +1249,45 @@ body.compact .meta {
 body.compact .actions button {
   padding: 2px 5px;
 }
+
+/* ── Images (miniature + dimensions) ─────────────────── */
+.kind-image {
+  --kind-color: #e58fb3;
+}
+:root[data-theme="light"] .kind-image {
+  --kind-color: #a8426c;
+}
+
+.image-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.thumb {
+  flex: none;
+  width: 96px;
+  height: 54px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.image-preview.detail .thumb {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 150px;
+  object-fit: contain;
+}
+
+.image-info {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+body.compact .thumb {
+  width: 64px;
+  height: 36px;
+}

@@ -12,6 +12,7 @@ import {
   exportFavorites,
   getAutostartEnabled,
   getChangelog,
+  getImageThumbnail,
   getUiPref,
   hideWindow,
   importFavorites,
@@ -37,6 +38,7 @@ import {
   unpinItem,
   updateItemContent,
   type Group,
+  type ImageMeta,
   type Item,
   type KindCount,
 } from "./api";
@@ -65,6 +67,7 @@ const KIND_META: Record<string, { label: string; icon: IconName }> = {
   phone: { label: "Téléphone", icon: "phone" },
   path: { label: "Chemin", icon: "folder" },
   text: { label: "Texte", icon: "file-text" },
+  image: { label: "Image", icon: "image" },
 };
 
 function kindMeta(kind: string): { label: string; icon: IconName } {
@@ -105,6 +108,59 @@ let compactMode = false;
 let pendingStartupUpdate: { version: string; notes: string } | null = null;
 
 const MONO_KINDS = new Set(["sql", "code", "json"]);
+
+/// URL `blob:` des miniatures, clé `id:created_at` : une image annotée change de
+/// `created_at`, donc de clé. Les anciennes URL d'un même élément sont révoquées.
+const thumbUrls = new Map<string, string>();
+
+async function thumbUrl(item: Item): Promise<string> {
+  const key = `${item.id}:${item.created_at}`;
+  const cached = thumbUrls.get(key);
+  if (cached) return cached;
+  const png = await getImageThumbnail(item.id);
+  const url = URL.createObjectURL(new Blob([png], { type: "image/png" }));
+  for (const [k, u] of thumbUrls) {
+    if (k.startsWith(`${item.id}:`)) {
+      URL.revokeObjectURL(u);
+      thumbUrls.delete(k);
+    }
+  }
+  thumbUrls.set(key, url);
+  return url;
+}
+
+/// « 1920 × 1080 · 412 Ko » (Mo avec une décimale au-delà de 1024 Ko).
+function formatImageMeta(meta: ImageMeta): string {
+  const ko = Math.max(1, Math.round(meta.bytes / 1024));
+  const size = ko >= 1024 ? `${(ko / 1024).toFixed(1).replace(".", ",")} Mo` : `${ko} Ko`;
+  return `${meta.width} × ${meta.height} · ${size}`;
+}
+
+/// Miniature d'une image + ses dimensions, à la place de l'aperçu texte.
+function buildImagePreview(item: Item, detail: boolean): HTMLDivElement {
+  const wrap = document.createElement("div");
+  wrap.className = detail ? "image-preview detail" : "image-preview";
+  const img = document.createElement("img");
+  img.className = "thumb";
+  img.alt = "Image";
+  img.decoding = "async";
+  void thumbUrl(item).then((url) => {
+    img.src = url;
+  });
+  wrap.appendChild(img);
+  if (item.image) {
+    const info = document.createElement("span");
+    info.className = "image-info";
+    info.textContent = formatImageMeta(item.image);
+    wrap.appendChild(info);
+  }
+  return wrap;
+}
+
+/// Ouvre l'éditeur d'annotation sur une image (branché dans la tâche suivante).
+async function annotateFlow(item: Item): Promise<void> {
+  void item;
+}
 
 function relativeTime(unixSeconds: number): string {
   const diff = Math.floor(Date.now() / 1000) - unixSeconds;
@@ -1067,6 +1123,10 @@ async function changeFavoriteGroup(item: Item): Promise<void> {
 /// prévenu et peut rouvrir l'édition pour corriger.
 async function editFavoriteContent(item: Item): Promise<void> {
   if (!item.pinned) return;
+  if (item.image) {
+    await annotateFlow(item);
+    return;
+  }
   const content = await promptContent(item.content);
   if (content === null) return;
   try {
@@ -1107,12 +1167,14 @@ const VIEW_HINTS: Record<View, Array<[string, string]>> = {
     ["↑↓", "naviguer"],
     ["Entrée", "copier"],
     ["Ctrl+P", "épingler"],
+    ["Ctrl+E", "annoter"],
     ["Échap", "fermer"],
   ],
   favorites: [
     ["↑↓", "naviguer"],
     ["Entrée", "copier"],
     ["F2", "renommer"],
+    ["Ctrl+E", "annoter"],
     ["Échap", "fermer"],
   ],
 };
@@ -1265,9 +1327,13 @@ function renderList(): void {
       li.appendChild(titleEl);
     }
 
-    const preview = document.createElement("div");
-    preview.className = MONO_KINDS.has(item.kind) ? "preview mono clamp" : "preview clamp";
-    fillPreview(preview, item.content, searchInput.value.trim());
+    const preview = item.image
+      ? buildImagePreview(item, false)
+      : document.createElement("div");
+    if (!item.image) {
+      preview.className = MONO_KINDS.has(item.kind) ? "preview mono clamp" : "preview clamp";
+      fillPreview(preview, item.content, searchInput.value.trim());
+    }
 
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -1305,6 +1371,17 @@ function renderList(): void {
     // dans le flux (elles ne recouvrent plus le texte de l'aperçu).
     const actions = document.createElement("div");
     actions.className = "actions";
+
+    if (item.image) {
+      const annotateBtn = document.createElement("button");
+      annotateBtn.title = "Annoter (Ctrl+E)";
+      annotateBtn.appendChild(icon("pen-line", 13));
+      annotateBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void annotateFlow(item);
+      });
+      actions.appendChild(annotateBtn);
+    }
 
     const pinBtn = document.createElement("button");
     pinBtn.title = item.pinned ? "Désépingler" : "Épingler";
@@ -1502,17 +1579,25 @@ function buildFavoriteRow(item: Item, index: number): HTMLLIElement {
     const detail = document.createElement("div");
     detail.className = "fav-detail";
 
-    const preview = document.createElement("div");
-    preview.className = MONO_KINDS.has(item.kind) ? "preview mono" : "preview";
-    preview.textContent = item.content;
-    detail.appendChild(preview);
+    if (item.image) {
+      detail.appendChild(buildImagePreview(item, true));
+    } else {
+      const preview = document.createElement("div");
+      preview.className = MONO_KINDS.has(item.kind) ? "preview mono" : "preview";
+      preview.textContent = item.content;
+      detail.appendChild(preview);
+    }
 
     const actions = document.createElement("div");
     actions.className = "fav-detail-actions";
     actions.appendChild(favAction("Copier", () => copyWithFlash(index)));
     actions.appendChild(favAction("Renommer", () => void renameFavorite(item)));
-    actions.appendChild(favAction("Modifier", () => void editFavoriteContent(item)));
-    actions.appendChild(favAction("Catégorie", () => void changeFavoriteKind(item)));
+    actions.appendChild(
+      favAction(item.image ? "Annoter" : "Modifier", () => void editFavoriteContent(item)),
+    );
+    if (!item.image) {
+      actions.appendChild(favAction("Catégorie", () => void changeFavoriteKind(item)));
+    }
     actions.appendChild(favAction("Dossier", () => void changeFavoriteGroup(item)));
     actions.appendChild(favAction("Retirer", () => void togglePinFlow(item)));
     detail.appendChild(actions);
@@ -1621,6 +1706,15 @@ document.addEventListener("keydown", (e) => {
       if (item && item.pinned) {
         e.preventDefault();
         void renameFavorite(item);
+      }
+      break;
+    }
+    case "e":
+    case "E": {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        const item = items[selectedIndex];
+        if (item?.image) void annotateFlow(item);
       }
       break;
     }
