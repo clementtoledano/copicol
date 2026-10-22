@@ -3,6 +3,15 @@
 Notes de version de copicol. Chaque entrée liste les changements visibles
 pour l'utilisateur ; les détails techniques restent dans l'historique Git.
 
+## Non publié
+
+### Images
+
+- Les images copiées (captures d'écran, « Copier l'image » d'un navigateur, fichier image copié depuis l'Explorateur) apparaissent dans l'historique avec une miniature, leurs dimensions et leur poids ; un onglet « Images » les filtre
+- Recollage d'une image comme une vraie image (Teams, Word, Outlook, Paint…), mise en favori, nommage, dossiers, export et import
+- Éditeur d'annotation (`Ctrl+E`, bouton « Annoter » ou « Modifier » d'un favori) : flèche, ligne, rectangle, ellipse, étapes numérotées, crayon, texte, 5 couleurs, annuler/rétablir. « Enregistrer » remplace l'image, la place dans le presse-papiers et cache la fenêtre
+- Les images non épinglées sont limitées à 200 Mo au total ; les plus anciennes sont supprimées en premier
+
 ## 0.4.0
 
 ### Interface
