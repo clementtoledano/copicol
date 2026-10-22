@@ -23,6 +23,18 @@ pub struct Item {
     pub group_id: Option<i64>,
     pub created_at: i64,
     pub use_count: i64,
+    /// Dimensions et poids d'une image (`kind = "image"`) ; jamais les octets
+    /// (la liste ne transporte que des métadonnées, la miniature est chargée à part).
+    pub image: Option<ImageMeta>,
+}
+
+/// Métadonnées d'une image stockée.
+#[derive(Serialize, Debug, Clone)]
+pub struct ImageMeta {
+    pub width: u32,
+    pub height: u32,
+    /// Poids du PNG stocké, en octets.
+    pub bytes: i64,
 }
 
 /// Un dossier de favoris créé par l'utilisateur.
@@ -119,7 +131,20 @@ fn init(conn: &Connection) -> rusqlite::Result<()> {
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS images (
+            item_id INTEGER PRIMARY KEY,
+            png BLOB NOT NULL,
+            thumb BLOB NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            bytes INTEGER NOT NULL
+        );
+        -- Supprimer un élément (suppression, purge, vidage) supprime son image.
+        CREATE TRIGGER IF NOT EXISTS items_delete_image AFTER DELETE ON items
+        BEGIN
+            DELETE FROM images WHERE item_id = OLD.id;
+        END;",
     )?;
     migrate(conn)
 }
@@ -263,6 +288,11 @@ pub const ALL_KINDS: [&str; 9] = [
 /// Change la catégorie d'un élément indépendamment de la détection
 /// automatique (reclassification manuelle d'un favori).
 pub fn set_kind(conn: &Connection, id: i64, kind: &str) -> rusqlite::Result<()> {
+    if is_image(conn, id)? {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "la catégorie d'une image n'est pas modifiable".to_string(),
+        ));
+    }
     if !ALL_KINDS.contains(&kind) {
         return Err(rusqlite::Error::InvalidParameterName(format!(
             "catégorie inconnue: {kind}"
@@ -276,9 +306,133 @@ pub fn set_kind(conn: &Connection, id: i64, kind: &str) -> rusqlite::Result<()> 
 /// recalculé ; échoue si un autre élément a déjà exactement ce contenu
 /// (contrainte d'unicité sur le hash).
 pub fn update_content(conn: &Connection, id: i64, content: &str) -> rusqlite::Result<()> {
+    if is_image(conn, id)? {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "le contenu d'une image n'est pas modifiable en texte".to_string(),
+        ));
+    }
     conn.execute(
         "UPDATE items SET content = ?2, hash = ?3 WHERE id = ?1",
         params![id, content, hash_content(content)],
+    )?;
+    Ok(())
+}
+
+// ── Images ──────────────────────────────────────────────────────────
+
+/// Budget disque des images **non épinglées** (200 Mo) ; au-delà, les plus
+/// anciennes sont purgées. Les favoris n'ont pas de limite.
+pub const MAX_IMAGE_BUDGET: i64 = 200 * 1024 * 1024;
+
+/// Image prête à être stockée : PNG, miniature et hash de dédoublonnage.
+pub struct NewImage {
+    pub png: Vec<u8>,
+    pub thumb: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub hash: String,
+}
+
+/// Encode l'image (PNG + miniature). Échoue si le PNG dépasse la limite.
+pub fn new_image(img: &crate::imaging::Rgba, hash: String) -> Result<NewImage, String> {
+    let png = crate::imaging::encode_png(img)?;
+    if png.len() > crate::imaging::MAX_PNG_BYTES {
+        return Err(format!("image trop volumineuse ({} octets)", png.len()));
+    }
+    Ok(NewImage {
+        png,
+        thumb: crate::imaging::thumbnail_png(img)?,
+        width: img.width,
+        height: img.height,
+        hash,
+    })
+}
+
+fn insert_image_row(conn: &Connection, item_id: i64, img: &NewImage) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO images (item_id, png, thumb, width, height, bytes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![item_id, img.png, img.thumb, img.width, img.height, img.png.len() as i64],
+    )?;
+    Ok(())
+}
+
+/// Insère une image dans l'historique, ou remonte l'existante (même hash) en tête.
+pub fn insert_or_touch_image(conn: &Connection, img: &NewImage, now: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO items (content, hash, kind, created_at) VALUES ('', ?1, 'image', ?2)
+         ON CONFLICT(hash) DO UPDATE SET created_at = excluded.created_at",
+        params![img.hash, now],
+    )?;
+    let id: i64 = conn.query_row("SELECT id FROM items WHERE hash = ?1", params![img.hash], |r| r.get(0))?;
+    insert_image_row(conn, id, img)?;
+    prune(conn)?;
+    prune_image_budget(conn, MAX_IMAGE_BUDGET)?;
+    Ok(())
+}
+
+/// Insère une image directement en favori (import). `false` si elle existait déjà.
+pub fn insert_favorite_image(
+    conn: &Connection,
+    img: &NewImage,
+    label: Option<&str>,
+    group_id: Option<i64>,
+    now: i64,
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "INSERT INTO items (content, hash, kind, pinned, label, group_id, created_at)
+         VALUES ('', ?1, 'image', 1, ?2, ?3, ?4)
+         ON CONFLICT(hash) DO NOTHING",
+        params![img.hash, label, group_id, now],
+    )?;
+    if changed == 0 {
+        return Ok(false);
+    }
+    let id = conn.last_insert_rowid();
+    insert_image_row(conn, id, img)?;
+    Ok(true)
+}
+
+/// Purge les images non épinglées les plus anciennes au-delà du budget.
+fn prune_image_budget(conn: &Connection, budget: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM items WHERE id IN (
+            SELECT id FROM (
+                SELECT items.id AS id,
+                       SUM(images.bytes) OVER (ORDER BY items.created_at DESC, items.id DESC) AS cum
+                FROM items JOIN images ON images.item_id = items.id
+                WHERE items.pinned = 0
+            ) WHERE cum > ?1
+        )",
+        params![budget],
+    )?;
+    Ok(())
+}
+
+pub fn is_image(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
+    conn.prepare("SELECT 1 FROM images WHERE item_id = ?1")?.exists(params![id])
+}
+
+pub fn get_image_png(conn: &Connection, id: i64) -> rusqlite::Result<Option<Vec<u8>>> {
+    conn.query_row("SELECT png FROM images WHERE item_id = ?1", params![id], |r| r.get(0))
+        .optional()
+}
+
+pub fn get_image_thumb(conn: &Connection, id: i64) -> rusqlite::Result<Option<Vec<u8>>> {
+    conn.query_row("SELECT thumb FROM images WHERE item_id = ?1", params![id], |r| r.get(0))
+        .optional()
+}
+
+/// Remplace l'image d'un élément (annotation) : nom, dossier et statut de
+/// favori sont conservés, l'élément remonte en tête.
+pub fn replace_image(conn: &Connection, id: i64, img: &NewImage, now: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE items SET hash = ?2, created_at = ?3 WHERE id = ?1",
+        params![id, img.hash, now],
+    )?;
+    conn.execute(
+        "UPDATE images SET png = ?2, thumb = ?3, width = ?4, height = ?5, bytes = ?6 WHERE item_id = ?1",
+        params![id, img.png, img.thumb, img.width, img.height, img.png.len() as i64],
     )?;
     Ok(())
 }
@@ -299,7 +453,10 @@ fn escape_like(term: &str) -> String {
     term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
-const ITEM_COLUMNS: &str = "id, content, kind, pinned, label, group_id, created_at, use_count";
+const ITEM_COLUMNS: &str = "items.id, items.content, items.kind, items.pinned, items.label, items.group_id, items.created_at, items.use_count, images.width, images.height, images.bytes";
+
+/// Jointure commune à toutes les listes d'éléments (métadonnées d'image incluses).
+const ITEM_FROM: &str = "items LEFT JOIN images ON images.item_id = items.id";
 
 fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<Item> {
     Ok(Item {
@@ -311,6 +468,14 @@ fn row_to_item(row: &rusqlite::Row) -> rusqlite::Result<Item> {
         group_id: row.get(5)?,
         created_at: row.get(6)?,
         use_count: row.get(7)?,
+        image: match row.get::<_, Option<i64>>(8)? {
+            Some(width) => Some(ImageMeta {
+                width: width as u32,
+                height: row.get::<_, i64>(9)? as u32,
+                bytes: row.get(10)?,
+            }),
+            None => None,
+        },
     })
 }
 
@@ -331,17 +496,17 @@ pub fn list_items(
 ) -> rusqlite::Result<Vec<Item>> {
     let pattern = search_pattern(search);
 
-    let mut sql = format!("SELECT {ITEM_COLUMNS} FROM items WHERE pinned = 0");
+    let mut sql = format!("SELECT {ITEM_COLUMNS} FROM {ITEM_FROM} WHERE items.pinned = 0");
     let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     if let Some(p) = &pattern {
-        sql.push_str(" AND content LIKE ? ESCAPE '\\'");
+        sql.push_str(" AND items.content LIKE ? ESCAPE '\\'");
         args.push(Box::new(p.clone()));
     }
     if let Some(k) = kind {
-        sql.push_str(" AND kind = ?");
+        sql.push_str(" AND items.kind = ?");
         args.push(Box::new(k.to_string()));
     }
-    sql.push_str(" ORDER BY created_at DESC, id DESC");
+    sql.push_str(" ORDER BY items.created_at DESC, items.id DESC");
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
@@ -357,14 +522,14 @@ pub fn list_items(
 pub fn list_favorites(conn: &Connection, search: Option<&str>) -> rusqlite::Result<Vec<Item>> {
     let pattern = search_pattern(search);
 
-    let mut sql = format!("SELECT {ITEM_COLUMNS} FROM items WHERE pinned = 1");
+    let mut sql = format!("SELECT {ITEM_COLUMNS} FROM {ITEM_FROM} WHERE items.pinned = 1");
     let mut args: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     if let Some(p) = &pattern {
-        sql.push_str(" AND (content LIKE ? ESCAPE '\\' OR label LIKE ? ESCAPE '\\')");
+        sql.push_str(" AND (items.content LIKE ? ESCAPE '\\' OR items.label LIKE ? ESCAPE '\\')");
         args.push(Box::new(p.clone()));
         args.push(Box::new(p.clone()));
     }
-    sql.push_str(" ORDER BY label IS NULL, label COLLATE NOCASE, id");
+    sql.push_str(" ORDER BY items.label IS NULL, items.label COLLATE NOCASE, items.id");
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
@@ -941,5 +1106,116 @@ mod tests {
 
         set_autostart_enabled(&conn, true).unwrap();
         assert!(autostart_enabled(&conn).unwrap());
+    }
+
+    fn img(seed: u8, w: u32, h: u32) -> NewImage {
+        let rgba = crate::imaging::Rgba { width: w, height: h, pixels: vec![seed; (w * h * 4) as usize] };
+        new_image(&rgba, crate::imaging::image_hash(&rgba)).unwrap()
+    }
+
+    #[test]
+    fn image_insert_and_list() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch(&conn, "du texte", 1).unwrap();
+        insert_or_touch_image(&conn, &img(7, 40, 30), 2).unwrap();
+        let items = list_items(&conn, None, None).unwrap();
+        assert_eq!(items[0].kind, "image");
+        assert_eq!(items[0].content, "");
+        let meta = items[0].image.as_ref().unwrap();
+        assert_eq!((meta.width, meta.height), (40, 30));
+        assert!(meta.bytes > 0);
+        assert!(items[1].image.is_none());
+        assert_eq!(list_items(&conn, None, Some("image")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn list_items_has_image_meta_without_blob() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch_image(&conn, &img(1, 10, 10), 1).unwrap();
+        let json = serde_json::to_value(&list_items(&conn, None, None).unwrap()[0]).unwrap();
+        let mut keys: Vec<_> = json["image"].as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["bytes", "height", "width"]); // aucune donnée binaire
+    }
+
+    #[test]
+    fn image_dedupe_moves_to_top() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch_image(&conn, &img(1, 10, 10), 1).unwrap();
+        insert_or_touch(&conn, "texte", 2).unwrap();
+        insert_or_touch_image(&conn, &img(1, 10, 10), 3).unwrap();
+        let items = list_items(&conn, None, None).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind, "image");
+    }
+
+    #[test]
+    fn search_never_matches_images() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch_image(&conn, &img(1, 10, 10), 1).unwrap();
+        assert!(list_items(&conn, Some("img"), None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_item_removes_image_row() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch_image(&conn, &img(1, 10, 10), 1).unwrap();
+        let id = list_items(&conn, None, None).unwrap()[0].id;
+        delete_item(&conn, id).unwrap();
+        insert_or_touch_image(&conn, &img(2, 10, 10), 2).unwrap();
+        clear_history(&conn).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM images", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn image_budget_prunes_oldest_unpinned_images() {
+        let conn = open_in_memory().unwrap();
+        // Poids déclarés gonflés à 90 Mo (colonne bytes) pour éviter d'allouer de vrais blobs
+        for (i, seed) in [1u8, 2, 3].iter().enumerate() {
+            insert_or_touch_image(&conn, &img(*seed, 4, 4), i as i64 + 1).unwrap();
+        }
+        conn.execute("UPDATE images SET bytes = 90 * 1024 * 1024", []).unwrap();
+        prune_image_budget(&conn, MAX_IMAGE_BUDGET).unwrap();
+        let items = list_items(&conn, None, Some("image")).unwrap();
+        assert_eq!(items.len(), 2); // 270 Mo > 200 Mo : la plus ancienne part
+        assert!(items.iter().all(|i| i.created_at >= 2));
+    }
+
+    #[test]
+    fn image_budget_ignores_favorites() {
+        let conn = open_in_memory().unwrap();
+        insert_favorite_image(&conn, &img(9, 4, 4), Some("schéma"), None, 1).unwrap();
+        insert_or_touch_image(&conn, &img(8, 4, 4), 2).unwrap();
+        conn.execute("UPDATE images SET bytes = 150 * 1024 * 1024", []).unwrap();
+        prune_image_budget(&conn, MAX_IMAGE_BUDGET).unwrap();
+        // 300 Mo au total mais le favori ne compte pas : l'image d'historique (150 Mo) reste
+        assert_eq!(list_items(&conn, None, Some("image")).unwrap().len(), 1);
+        assert_eq!(list_favorites(&conn, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn replace_image_updates_and_moves_to_top() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch_image(&conn, &img(1, 10, 10), 1).unwrap();
+        let id = list_items(&conn, None, None).unwrap()[0].id;
+        pin_item(&conn, id, "capture").unwrap();
+        replace_image(&conn, id, &img(5, 20, 15), 50).unwrap();
+        let fav = &list_favorites(&conn, None).unwrap()[0];
+        assert_eq!(fav.label.as_deref(), Some("capture"));
+        assert_eq!(fav.created_at, 50);
+        assert_eq!(fav.image.as_ref().map(|m| (m.width, m.height)), Some((20, 15)));
+    }
+
+    #[test]
+    fn images_cannot_be_reclassified_or_text_edited() {
+        let conn = open_in_memory().unwrap();
+        insert_or_touch_image(&conn, &img(1, 10, 10), 1).unwrap();
+        let id = list_items(&conn, None, None).unwrap()[0].id;
+        assert!(set_kind(&conn, id, "text").is_err());
+        assert!(update_content(&conn, id, "x").is_err());
+        insert_or_touch(&conn, "texte", 2).unwrap();
+        let text_id = list_items(&conn, None, Some("text")).unwrap()[0].id;
+        assert!(set_kind(&conn, text_id, "image").is_err()); // "image" n'est pas dans ALL_KINDS
     }
 }
