@@ -1,3 +1,4 @@
+use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -47,7 +48,7 @@ pub struct Group {
 // ── Import / export des favoris (fichier JSON) ──────────────────────
 
 fn schema_version() -> u32 {
-    1
+    2
 }
 fn default_kind() -> String {
     "text".to_string()
@@ -79,6 +80,9 @@ pub struct FavoriteEntry {
     #[serde(default)]
     pub group: Option<String>,
     pub content: String,
+    /// PNG d'un favori image, en base64 (version 2 du fichier).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_png: Option<String>,
 }
 
 /// Un type de contenu présent dans l'historique, avec son nombre d'éléments.
@@ -683,6 +687,14 @@ pub fn export_favorites(conn: &Connection) -> rusqlite::Result<FavoritesFile> {
         .map(|f| FavoriteEntry {
             group: f.group_id.and_then(|id| name_by_id.get(&id).cloned()),
             label: f.label,
+            image_png: if f.image.is_some() {
+                get_image_png(conn, f.id)
+                    .ok()
+                    .flatten()
+                    .map(|png| base64::engine::general_purpose::STANDARD.encode(png))
+            } else {
+                None
+            },
             kind: f.kind,
             content: f.content,
         })
@@ -732,6 +744,29 @@ pub fn import_favorites(
     let mut imported = 0;
     let mut skipped = 0;
     for fav in &file.favorites {
+        if let Some(b64) = &fav.image_png {
+            let group_id = match fav.group.as_deref().map(str::trim) {
+                Some(name) if !name.is_empty() => Some(group_id_for(conn, name)?),
+                _ => None,
+            };
+            let label = fav.label.as_deref().filter(|s| !s.trim().is_empty());
+            let stored = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| e.to_string())
+                .and_then(|png| crate::imaging::decode(&png))
+                .and_then(|rgba| {
+                    if crate::imaging::within_limits(rgba.width, rgba.height) {
+                        new_image(&rgba, crate::imaging::image_hash(&rgba))
+                    } else {
+                        Err("image trop grande".to_string())
+                    }
+                });
+            match stored {
+                Ok(img) if insert_favorite_image(conn, &img, label, group_id, now)? => imported += 1,
+                _ => skipped += 1,
+            }
+            continue;
+        }
         if fav.content.trim().is_empty() {
             skipped += 1;
             continue;
@@ -1217,5 +1252,44 @@ mod tests {
         insert_or_touch(&conn, "texte", 2).unwrap();
         let text_id = list_items(&conn, None, Some("text")).unwrap()[0].id;
         assert!(set_kind(&conn, text_id, "image").is_err()); // "image" n'est pas dans ALL_KINDS
+    }
+
+    #[test]
+    fn export_import_roundtrip_with_image() {
+        let src = open_in_memory().unwrap();
+        insert_favorite_image(&src, &img(3, 12, 8), Some("logo"), None, 1).unwrap();
+        insert_favorite(&src, "texte fav", Some("t"), "text", None, 2).unwrap();
+        let file = export_favorites(&src).unwrap();
+        assert_eq!(file.version, 2);
+        let entry = file.favorites.iter().find(|f| f.kind == "image").unwrap();
+        assert!(entry.image_png.is_some());
+        assert_eq!(entry.content, "");
+
+        let dst = open_in_memory().unwrap();
+        let json = serde_json::to_string(&file).unwrap();
+        let parsed: FavoritesFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(import_favorites(&dst, &parsed, 10).unwrap(), (2, 0));
+        let fav = list_favorites(&dst, None).unwrap().into_iter().find(|f| f.kind == "image").unwrap();
+        assert_eq!(fav.image.as_ref().map(|m| (m.width, m.height)), Some((12, 8)));
+        // réimport : dédoublonné par hash
+        assert_eq!(import_favorites(&dst, &parsed, 11).unwrap(), (0, 2));
+    }
+
+    #[test]
+    fn import_v2_skips_invalid_image() {
+        let conn = open_in_memory().unwrap();
+        let json = r#"{"version":2,"favorites":[
+            {"label":"cassée","kind":"image","content":"","image_png":"!!pas du base64!!"},
+            {"label":"pas une image","kind":"image","content":"","image_png":"aGVsbG8="}]}"#;
+        let file: FavoritesFile = serde_json::from_str(json).unwrap();
+        assert_eq!(import_favorites(&conn, &file, 1).unwrap(), (0, 2));
+    }
+
+    #[test]
+    fn import_v1_file_still_works() {
+        let conn = open_in_memory().unwrap();
+        let json = r#"{"version":1,"favorites":[{"label":"a","kind":"text","content":"bonjour"}]}"#;
+        let file: FavoritesFile = serde_json::from_str(json).unwrap();
+        assert_eq!(import_favorites(&conn, &file, 1).unwrap(), (1, 0));
     }
 }
