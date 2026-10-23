@@ -3,6 +3,12 @@
 Notes de version de copicol. Chaque entrée liste les changements visibles
 pour l'utilisateur ; les détails techniques restent dans l'historique Git.
 
+## 0.5.1
+
+### Corrections
+
+- Les miniatures des images s'affichent correctement dans l'historique et les favoris (elles apparaissaient cassées)
+
 ## 0.5.0
 
 ### Images
